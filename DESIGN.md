@@ -11,32 +11,38 @@ light theme: StarBrook is a night broadcast.
 
 ## 1. Palette
 
-Measured from the live Mix page and the canonical Live Star logo. Warm
-off-white text (never pure white — pure white on near-black vibrates).
-Gold is the only accent that shouts; purple is the quiet second voice;
-red is reserved for live/breaking/alert — nowhere else.
+Matches the live site EXACTLY (Matthew's word 2026-11-19 ~13:53 CST).
+Tokens are the live `:root` values from the News/Weather pages (identical
+on both). Gold is the only accent that shouts; purple is the quiet second
+voice; red is reserved for live/breaking/alert — nowhere else.
 
-| Token | Hex | Role |
-|---|---|---|
-| `background` | `#0A0714` | App background (the Mix page bg) |
-| `surface` | `#14101F` | Cards, sheets, top bar, bottom nav |
-| `surfaceVariant` | `#1E1830` | Pressed states, chips, image fallback, skeletons |
-| `textPrimary` | `#F5F1E8` | Headlines, body |
-| `textSecondary` | `#A79FB8` | Source lines, timestamps, meta, captions |
-| `gold` | `#E8C266` | Accent, CTAs, selected tab, Original badge, play |
-| `liveRed` | `#EA252A` | Live dot, breaking strip, errors, alerts |
-| `border` | `#2A2338` | Hairlines, field outlines, dividers |
-| `accentPurple` | `#8B7CF6` | Secondary highlights, links, CADE accents |
-| `onGold` | `#1A1206` | Text/icons on gold |
+| Token | Hex | Site token | Role |
+|---|---|---|---|
+| `background` | `#0E0A1A` | `--night` | App background (the Mix page bg) |
+| `surface` | `#1B1233` | `--card` | Cards, sheets, top bar, bottom nav |
+| `surfaceVariant` | `#160F2B` | `--deep` | Pressed states, chips, image fallback, skeletons |
+| `textPrimary` | `#F3EEFF` | `--text` | Headlines, body |
+| `textSecondary` | `#A79DC4` | `--dim` | Source lines, timestamps, meta, captions |
+| `gold` | `#E8C266` | `--gold` | Accent, CTAs, selected tab, Original badge, play |
+| `goldsoft` | `#2A1F45` | `--goldsoft` | Gold-tinted dark surface, selected chips |
+| `golddark` | `#C9A227` | `--golddark` | Darker gold, pressed/hover gold |
+| `liveRed` | `#B91C1C` | `--red` | Live dot, breaking strip, errors, alerts |
+| `reddeep` | `#7F1D1D` | `--reddeep` | Deep red, breaking backgrounds |
+| `redsoft` | `#FCA5A5` | `--redsoft` | Light red, alert text on dark |
+| `border` | `#3A2E5C` | `--line` | Hairlines, field outlines, dividers |
+| `accentPurple` | `#8B7CF6` | — (no site token) | Secondary highlights, links, CADE accents |
+| `onGold` | `#1A1206` | — (functional) | Text/icons on gold |
 
-`liveRed` is the red dot measured off the logo PNG (`#EA252A`), not a
-generic Material red. Logo gold measures `#E7BC59`; the UI uses the
-contract gold `#E8C266` everywhere including the logo — one gold.
+The Live Star logo artwork keeps its own red dot (`#EA252A`, measured off
+the logo PNG) — only the UI red token follows the site. Logo gold measures
+`#E7BC59`; the UI uses the site gold `#E8C266` everywhere including the
+logo — one gold.
 
 **Extended (guidance, not tokens — use sparingly, always on dark):**
 weather radar uses the RainViewer palette as served; NWS alert banners
 use `liveRed` (severe) / `gold` (watch) / `accentPurple` (advisory).
-Success states use `gold`, never green — the app has one accent.
+Success states use `gold`, never green — the app has one accent. (The site
+also defines `--green #34D399`; not adopted as a token.)
 
 ## 2. Type scale
 
