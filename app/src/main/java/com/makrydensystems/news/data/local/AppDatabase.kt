@@ -3,6 +3,7 @@ package com.makrydensystems.news.data.local
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import com.makrydensystems.news.data.model.Breaking
