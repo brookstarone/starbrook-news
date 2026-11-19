@@ -1,6 +1,7 @@
 package com.makrydensystems.news.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -179,6 +180,7 @@ private fun TickerControlButton(
             .background(Color.Transparent)
             .clickable(
                 interactionSource = press.interactionSource,
+                indication = LocalIndication.current,
                 onClick = onClick,
             )
             .border(1.dp, StarBrookColors.border, RoundedCornerShape(10.dp))

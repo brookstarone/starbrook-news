@@ -467,7 +467,7 @@ class NewsRepositoryImpl(
 
     override suspend fun extractBody(articleUrl: String): ExtractResult =
         withContext(Dispatchers.IO) {
-            val payload = json.encodeToString(ExtractRequest(articleUrl))
+            val payload = json.encodeToString(ExtractRequest.serializer(), ExtractRequest(articleUrl))
             val request = Request.Builder()
                 .url(STORY_BODY_EXTRACT_URL)
                 .header("User-Agent", NEWS_USER_AGENT)
@@ -579,8 +579,8 @@ class NewsRepositoryImpl(
     private fun excerptOf(body: String, limit: Int = 200): String {
         val text = body.replace(Regex("\\s+"), " ").trim()
         if (text.length <= limit) return text
-        val cut = text.slice(0, limit).split(" ").dropLast(1).joinToString(" ")
-        return (cut.ifBlank { text.slice(0, limit) }).trimEnd() + " …"
+        val cut = text.substring(0, limit).split(" ").dropLast(1).joinToString(" ")
+        return (cut.ifBlank { text.substring(0, limit) }).trimEnd() + " …"
     }
 
     // --- Search (local Room only — no network search endpoint exists) ---

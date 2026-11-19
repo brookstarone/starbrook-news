@@ -111,9 +111,11 @@ private class HomeViewModel(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    val stories: StateFlow<FeedState<List<Story>>> = refreshTick
-        .flatMapLatest { edition.flatMapLatest { repo.editionsFlow(it) } }
-        .combine(settings.sectionsFlow, selectedSection) { list, enabled, selected ->
+    val stories: StateFlow<FeedState<List<Story>>> = combine(
+        refreshTick.flatMapLatest { edition.flatMapLatest { repo.editionsFlow(it) } },
+        settings.sectionsFlow,
+        selectedSection,
+    ) { list, enabled, selected ->
             // FILTER FIX (drawer): SettingsStore.ALL_SECTIONS is only
             // {national, local, tech, business, culture} — the prefs filter
             // alone drops Sports / Faith / Science (6 of 15 live stories).

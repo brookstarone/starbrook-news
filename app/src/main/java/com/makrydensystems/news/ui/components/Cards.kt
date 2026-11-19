@@ -198,11 +198,11 @@ fun TrustBadge(
 @Composable
 private fun BookmarkGlyph(
     filled: Boolean,
-    size: Dp,
+    glyphSize: Dp,
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    Canvas(modifier = modifier.size(size)) {
+    Canvas(modifier = modifier.size(glyphSize)) {
         val path = Path().apply {
             moveTo(size.width * 0.28f, size.height * 0.14f)
             lineTo(size.width * 0.72f, size.height * 0.14f)
@@ -253,7 +253,7 @@ private fun SaveButton(
             ),
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
-            BookmarkGlyph(filled = true, size = 18.dp, color = StarBrookColors.onGold)
+            BookmarkGlyph(filled = true, glyphSize = 18.dp, color = StarBrookColors.onGold)
             Text(
                 text = "Saved to Shelf",
                 style = StarBrookType.label,
@@ -274,7 +274,7 @@ private fun SaveButton(
             border = BorderStroke(1.dp, StarBrookColors.gold),
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
-            BookmarkGlyph(filled = false, size = 18.dp, color = StarBrookColors.gold)
+            BookmarkGlyph(filled = false, glyphSize = 18.dp, color = StarBrookColors.gold)
             Text(
                 text = "Save to Shelf",
                 style = StarBrookType.label,
