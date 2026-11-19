@@ -12,6 +12,7 @@
 
 ## Pinned versions (do not upgrade without coordinator approval)
 - AGP 8.2.2 · Kotlin 2.0.21 · Compose BOM 2024.09.00 · navigation-compose 2.7.7
+- Compose compiler: Kotlin Compose plugin 2.0.21 (version = Kotlin version). NEVER set `composeOptions.kotlinCompilerExtensionVersion` — the 1.5.x artifact pairs with Kotlin 1.9.x only (Build #5).
 - Coil 2.7.0 · Media3 1.3.1 · kotlinx-serialization-json 1.7.3 · OkHttp 4.12.0
 - Room 2.6.1 · DataStore Preferences 1.1.1 · lifecycle-viewmodel-compose 2.8.5
 - Single module `app`. MVVM + Repository. No Hilt (manual DI in `di/AppContainer.kt` — keep it simple, keep it working).

@@ -13,6 +13,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
+    // Compose compiler (Kotlin Compose plugin 2.0.21 = Kotlin 2.0.21).
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -74,11 +76,10 @@ android {
     buildFeatures {
         compose = true
     }
-    composeOptions {
-        // Compose Compiler 1.5.15 pairs with Kotlin 2.0.21 and
-        // Compose BOM 2024.09.00.
-        kotlinCompilerExtensionVersion = "1.5.15"
-    }
+    // No composeOptions block: the Kotlin Compose plugin (above) supplies
+    // the compiler at the Kotlin version. The old
+    // kotlinCompilerExtensionVersion = "1.5.15" paired with Kotlin 1.9.25
+    // only and broke the build against Kotlin 2.0.21 (Build #5).
 }
 
 tasks.named("preBuild").configure {
