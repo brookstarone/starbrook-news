@@ -60,10 +60,10 @@ import com.makrydensystems.news.ui.theme.StarBrookType
  *
  * This version makes every step explicit: player built before the view
  * attaches, play() asserted in LaunchedEffect, showController() called
- * on attach, buffering spinner on, Compose-surface workaround on, the
- * player box sized for the real 9:16 format, a loading indicator while
- * buffering, and an error message + retry instead of a silent black
- * frame. Same screen, same dark/gold look — Back, player, title.
+ * on attach, buffering spinner on, the player box sized for the real
+ * 9:16 format, a loading indicator while buffering, and an error message
+ * + retry instead of a silent black frame. Same screen, same dark/gold
+ * look — Back, player, title.
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -138,7 +138,6 @@ fun VideoScreen(
         ) {
             VideoPlayerView(
                 player = player,
-                isFullscreen = true,
                 onFullscreenToggle = { isFullscreen = false },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -189,7 +188,6 @@ fun VideoScreen(
                     if (activePlayer != null) {
                         VideoPlayerView(
                             player = activePlayer,
-                            isFullscreen = false,
                             onFullscreenToggle = { isFullscreen = true },
                             modifier = Modifier
                                 .fillMaxHeight()
@@ -248,7 +246,6 @@ fun VideoScreen(
 @Composable
 private fun VideoPlayerView(
     player: ExoPlayer,
-    isFullscreen: Boolean,
     onFullscreenToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -267,11 +264,13 @@ private fun VideoPlayerView(
                     // without this the player stalls silently.
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT)
-                    // Compose AndroidView + SurfaceView sync workaround
-                    // (Media3 issue #1237, API 34 target).
-                    setEnableComposeSurfaceSyncWorkaround(true)
                     // Setting a listener is what makes the fullscreen
-                    // button appear in the stock controller.
+                    // button appear in the stock controller. Fullscreen
+                    // state itself is app-managed (VideoScreen's
+                    // isFullscreen drives the layout + Back handling);
+                    // PlayerView 1.3.1 exposes no setter for the
+                    // button's icon state, so there is no
+                    // setFullscreenButtonState call here.
                     setFullscreenButtonClickListener { _ -> onFullscreenToggle() }
                     // Do not rely on auto-show timing across the nav
                     // transition: show the controls now. They hide
@@ -279,9 +278,6 @@ private fun VideoPlayerView(
                     // up indefinitely while paused, ended, or failed.
                     showController()
                 }
-            },
-            update = { view ->
-                view.setFullscreenButtonState(isFullscreen)
             },
             onRelease = { view ->
                 view.player = null
