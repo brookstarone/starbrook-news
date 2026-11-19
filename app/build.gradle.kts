@@ -2,7 +2,11 @@
 // Pinned: AGP 8.2.2, Kotlin 2.0.21, Compose BOM 2024.09.00 (CONTRACT.md).
 // No secrets in this file: v1 fetches public URLs only. Release signing
 // reads keystore.properties ONLY when the file exists locally (never
-// committed); CI builds debug in v1 and never signs.
+// committed); debug builds use the shared committed debug key
+// (keystores/debug.keystore, conventional "android" passwords — a public
+// debug key, not a secret) so every CI build signs with the SAME key and
+// installs over the previous debug build instead of Android refusing the
+// update (Build #8 and #12 each carried a different runner-generated key).
 
 import java.util.Properties
 
@@ -42,6 +46,18 @@ android {
     }
 
     signingConfigs {
+        // Stable shared debug key (keystores/debug.keystore, committed):
+        // every CI runner signs debug builds with the SAME key, so each
+        // new debug APK installs over the previous one instead of
+        // Android refusing the update. This is the conventional public
+        // debug key (passwords "android") — not a secret, and not the
+        // release upload key (starbrook-news-upload.jks, never committed).
+        getByName("debug") {
+            storeFile = rootProject.file("keystores/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         // Created only when keystore.properties is present in the
         // workdir (local release builds). Absent on CI and fresh
         // checkouts — release builds then fail loudly instead of
@@ -64,6 +80,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // Signed with the shared committed debug key (see
+            // signingConfigs above) so CI debug builds install over
+            // each other instead of each runner minting its own key.
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = false
