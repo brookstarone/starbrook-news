@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -43,6 +44,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.makrydensystems.news.data.SettingsStore
 import com.makrydensystems.news.data.StarBrookApi
 import com.makrydensystems.news.data.WeatherRepository
@@ -271,6 +273,19 @@ private fun StatCell(label: String, value: String, modifier: Modifier = Modifier
 /** OpenStreetMap base-map tile — the map the RainViewer radar sits on. */
 private fun baseMapTileUrl(z: Int, x: Int, y: Int): String =
     "https://tile.openstreetmap.org/$z/$x/$y.png"
+
+/**
+ * OpenStreetMap's Tile Usage Policy requires tile requests to carry a
+ * valid User-Agent identifying the application, with contact info.
+ * Coil's default client sends OkHttp's generic "okhttp/…" UA, which
+ * OSM blocks with 403 ("App is not following the tile usage policy")
+ * — that was the black radar on the phone: all 9 base-map tiles 403'd
+ * while the RainViewer overlay (which tolerates the generic UA) still
+ * rendered. The base-map request below carries this UA; the
+ * attribution line under the radar stays as-is.
+ */
+private const val OSM_TILE_USER_AGENT =
+    "StarBrookNews/1.0 (https://makrydensystems.com; matt@makrydensystems.com)"
 
 /**
  * Weather tab (v1). NWS only. No ZIP = prompt, no video, no default
@@ -656,6 +671,7 @@ private fun RadarView(
     // (verified live 2026-11-19). Zoom 6 was continental scale, so even
     // real rain rendered as a speck.
     val zoom = 7
+    val context = LocalContext.current
     val (cx, cy) = tileXY(lat, lon, zoom)
     val frame = loopFrames[frameIndex]
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -683,7 +699,10 @@ private fun RadarView(
                                     .aspectRatio(1f),
                             ) {
                                 AsyncImage(
-                                    model = baseMapTileUrl(zoom, cx + dx, cy + dy),
+                                    model = ImageRequest.Builder(context)
+                                        .data(baseMapTileUrl(zoom, cx + dx, cy + dy))
+                                        .addHeader("User-Agent", OSM_TILE_USER_AGENT)
+                                        .build(),
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize(),
