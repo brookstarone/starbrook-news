@@ -1,0 +1,49 @@
+<!--
+  Launcher foreground: the Live Star, scaled to sit inside the
+  adaptive-icon safe zone (66dp). Same measured paths as
+  ic_live_star.xml, scaled 0.32 and centred: the mark spans
+  x 15.6..92.4, y 22.8..85.2 in the 108 viewport, so the star and
+  arcs survive the launcher mask. Static only.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:scaleX="0.32"
+        android:scaleY="0.32"
+        android:translateX="15.6"
+        android:translateY="22.8">
+
+        <path
+            android:fillColor="#E8C266"
+            android:pathData="M93,2 L113,76 L164,97 L114,117 L93,193 L72,117 L2,97 L73,76 Z" />
+
+        <path
+            android:fillColor="#EA252A"
+            android:pathData="M117,21.5 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0 Z" />
+
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#E8C266"
+            android:strokeWidth="9"
+            android:strokeLineCap="round"
+            android:pathData="M153,25 A86,86 0 0,1 153,169" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#E8C266"
+            android:strokeWidth="9"
+            android:strokeLineCap="round"
+            android:pathData="M206,28 A343.5,343.5 0 0,1 206,166" />
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#E8C266"
+            android:strokeWidth="9"
+            android:strokeLineCap="round"
+            android:pathData="M160,5 A94,94 0 0,1 160,190" />
+
+    </group>
+
+</vector>

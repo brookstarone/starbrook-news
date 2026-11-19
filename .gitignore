@@ -1,0 +1,11 @@
+# StarBrook News — never commit secrets or binaries.
+*.jks
+keystore.properties
+local.properties
+.gradle/
+build/
+app/build/
+app/src/main/res/font/*.ttf
+.idea/
+*.iml
+.DS_Store

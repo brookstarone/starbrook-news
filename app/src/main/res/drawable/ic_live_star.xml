@@ -1,0 +1,55 @@
+<!--
+  StarBrook Live Star — canonical logo, redrawn as a vector.
+  Source: the Live Star PNG embedded in the live News page masthead
+  (https://makrydensystems.com/news/, img.newsmark) — 240x195,
+  extracted from ~/workspace/news-redesign-work/news_mix.html.
+  No SVG of the logo exists anywhere (website repo, newslogo-work,
+  logo concept folders all hold PNG/WebP only), so this is a
+  measurement-faithful trace, verified pixel-by-pixel:
+    - 4-point star: tips (93,2) (164,97) (93,193) (2,97);
+      waist (73,76) (113,76) (114,117) (72,117); straight edges.
+    - Red dot: centre (125.5,21.5), r 8.5, colour #EA252A (measured).
+    - Three ")" broadcast arcs, circular, stroke ~9:
+        A: centre (106,97) r 86, (153,25)->(153,169)
+        B: centre (-130.5,97) r 343.5, (206,28)->(206,166)
+        C: centre (140,97) r 94, (160,5)->(160,190)
+  Gold is unified to the contract accent #E8C266 (logo measures
+  #E7BC59 — visually identical). STATIC ONLY — never animated.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="195dp"
+    android:viewportWidth="240"
+    android:viewportHeight="195">
+
+    <!-- 4-point star -->
+    <path
+        android:fillColor="#E8C266"
+        android:pathData="M93,2 L113,76 L164,97 L114,117 L93,193 L72,117 L2,97 L73,76 Z" />
+
+    <!-- Live red dot -->
+    <path
+        android:fillColor="#EA252A"
+        android:pathData="M117,21.5 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0 Z" />
+
+    <!-- Broadcast arcs -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#E8C266"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M153,25 A86,86 0 0,1 153,169" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#E8C266"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M206,28 A343.5,343.5 0 0,1 206,166" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#E8C266"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:pathData="M160,5 A94,94 0 0,1 160,190" />
+
+</vector>

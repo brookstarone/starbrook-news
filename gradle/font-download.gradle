@@ -1,0 +1,163 @@
+// StarBrook News — build-time font download.
+//
+// Fonts are OFL / freely licensed, but the TTF binaries are NEVER
+// committed to git (the GitHub connector is UTF-8 only and cannot
+// push binaries). This task downloads the exact pinned files on a
+// fresh checkout, verifies every SHA-256, and places them in
+// app/src/main/res/font/ — so CI and a clean clone build identically
+// to a machine that already has the fonts.
+//
+// Pinned sources (verified 2026-11-19; also documented in DESIGN.md):
+//   Inter 4.1 (SIL OFL 1.1) — rsms/inter GitHub release zip:
+//     https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+//     sha256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
+//     Static TTFs used: extras/ttf/Inter-{Regular,Medium,SemiBold,Bold}.ttf
+//   Liberation Sans 2.1.5 (SIL OFL 1.1) — Ubuntu fonts-liberation .deb:
+//     http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-liberation/fonts-liberation_2.1.5-3_all.deb
+//     sha256 065c2ab1abc9108b17d401016dc594b79750904390f095845c93bb06e1153acc
+//     File used: usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf
+//     (Liberation publishes no release tarball with TTFs — the GitHub
+//     releases carry no assets and the source tarball is .sfd only —
+//     so the canonical distro package is the pinned source. The .deb's
+//     data.tar.zst needs `ar` + `zstd` to unpack; a python3
+//     `zstandard` fallback is included for machines without the zstd
+//     CLI. Both tools exist on GitHub ubuntu-24.04 runners.)
+//
+// TTF hashes (the check that actually matters — a wrong font fails
+// the build loudly instead of shipping a subtly wrong face):
+//   inter_regular.ttf   40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82
+//   inter_medium.ttf    97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872
+//   inter_semibold.ttf  78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3
+//   inter_bold.ttf      288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f
+//   liberation_sans_bold.ttf 3973aa5054fb467dd5627245d3dc82e37bf16fe075756156a570455871351582
+//
+// Wiring (skeleton agent): in app/build.gradle.kts,
+//     apply(from = "$rootDir/gradle/font-download.gradle")
+// and hook it before resources merge:
+//     tasks.named("preBuild").configure { dependsOn("downloadStarBrookFonts") }
+// The task is incremental: fonts already present with a matching
+// hash are left alone, so normal builds never touch the network.
+
+import java.security.MessageDigest
+
+def fontDir = file("$projectDir/src/main/res/font")
+def buildDir = layout.buildDirectory.dir("font-download").get().asFile
+
+def sha256(File f) {
+    def digest = MessageDigest.getInstance("SHA-256")
+    f.withInputStream { stream ->
+        byte[] buffer = new byte[8192]
+        int read
+        while ((read = stream.read(buffer)) != -1) {
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().encodeHex().toString()
+}
+
+def download(String url, File dest) {
+    dest.parentFile.mkdirs()
+    new URL(url).withInputStream { input ->
+        dest.withOutputStream { output -> output << input }
+    }
+}
+
+def verify(File f, String expected, String label) {
+    def actual = sha256(f)
+    if (actual != expected) {
+        throw new GradleException(
+            "$label SHA-256 mismatch: expected $expected, got $actual ($f). " +
+            "Delete the file and re-run :app:downloadStarBrookFonts.")
+    }
+}
+
+def expectedFonts = [
+    "inter_regular.ttf"       : "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82",
+    "inter_medium.ttf"        : "97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872",
+    "inter_semibold.ttf"      : "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3",
+    "inter_bold.ttf"          : "288316099b1e0a47a4716d159098005eef7c0066921f34e3200393dbdb01947f",
+    "liberation_sans_bold.ttf": "3973aa5054fb467dd5627245d3dc82e37bf16fe075756156a570455871351582",
+]
+
+tasks.register("downloadStarBrookFonts") {
+    group = "starbrook"
+    description = "Downloads pinned Inter + Liberation Sans Bold TTFs into res/font (SHA-256 verified)."
+    outputs.dir(fontDir)
+
+    doLast {
+        fontDir.mkdirs()
+        buildDir.mkdirs()
+        def missing = expectedFonts.findAll { name, hash ->
+            def f = new File(fontDir, name)
+            !(f.exists() && sha256(f) == hash)
+        }
+        if (missing.isEmpty()) {
+            logger.lifecycle("StarBrook fonts: all ${expectedFonts.size()} present and verified.")
+            return
+        }
+        logger.lifecycle("StarBrook fonts: downloading ${missing.keySet()} …")
+
+        // ---- Inter 4.1 ----
+        if (missing.keySet().any { it.startsWith("inter_") }) {
+            def zip = new File(buildDir, "Inter-4.1.zip")
+            download("https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip", zip)
+            verify(zip, "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e", "Inter-4.1.zip")
+            def interDir = new File(buildDir, "inter-4.1")
+            copy {
+                from zipTree(zip)
+                into interDir
+            }
+            [
+                "Inter-Regular.ttf" : "inter_regular.ttf",
+                "Inter-Medium.ttf"  : "inter_medium.ttf",
+                "Inter-SemiBold.ttf": "inter_semibold.ttf",
+                "Inter-Bold.ttf"    : "inter_bold.ttf",
+            ].each { src, dest ->
+                copy {
+                    from new File(interDir, "extras/ttf/$src")
+                    into fontDir
+                    rename { dest }
+                }
+            }
+        }
+
+        // ---- Liberation Sans Bold 2.1.5 (Ubuntu .deb) ----
+        if (missing.containsKey("liberation_sans_bold.ttf")) {
+            def deb = new File(buildDir, "fonts-liberation_2.1.5-3_all.deb")
+            download("http://archive.ubuntu.com/ubuntu/pool/main/f/fonts-liberation/fonts-liberation_2.1.5-3_all.deb", deb)
+            verify(deb, "065c2ab1abc9108b17d401016dc594b79750904390f095845c93bb06e1153acc", "fonts-liberation_2.1.5-3_all.deb")
+            def unpackDir = new File(buildDir, "liberation")
+            unpackDir.mkdirs()
+            // data.tar.zst inside the .deb. Prefer the zstd CLI, fall
+            // back to python3 + zstandard, fail loudly otherwise.
+            def zstdOk = ["bash", "-c", "command -v zstd && command -v ar"].execute().waitFor() == 0
+            if (zstdOk) {
+                exec {
+                    workingDir unpackDir
+                    commandLine "bash", "-c",
+                        "ar p ${deb.absolutePath} data.tar.zst | zstd -d -c | tar -x"
+                }
+            } else {
+                exec {
+                    workingDir unpackDir
+                    commandLine "bash", "-c",
+                        "ar p ${deb.absolutePath} data.tar.zst > data.tar.zst && " +
+                        "python3 -c \"import sys, zstandard, tarfile, io; " +
+                        "d = zstandard.ZstdDecompressor(); " +
+                        "data = open('data.tar.zst','rb').read(); " +
+                        "tarfile.open(fileobj=io.BytesIO(d.stream_reader(io.BytesIO(data)).read())).extractall('.')\""
+                }
+            }
+            copy {
+                from new File(unpackDir, "usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")
+                into fontDir
+                rename { "liberation_sans_bold.ttf" }
+            }
+        }
+
+        expectedFonts.each { name, hash ->
+            verify(new File(fontDir, name), hash, name)
+        }
+        logger.lifecycle("StarBrook fonts: downloaded and verified (${expectedFonts.size()} files).")
+    }
+}
