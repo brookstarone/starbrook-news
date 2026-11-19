@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -24,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -32,11 +35,13 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.makrydensystems.news.data.SettingsStore
 import com.makrydensystems.news.data.di.AppContainer
+import com.makrydensystems.news.data.di.PushModule
 import com.makrydensystems.news.ui.components.SectionHeader
 import com.makrydensystems.news.ui.theme.StarBrookColors
 import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -68,6 +73,24 @@ private class SettingsViewModel(private val store: SettingsStore) : ViewModel() 
         viewModelScope.launch { store.setNotifyEvening(on) }
     fun setNotifyWeather(on: Boolean) =
         viewModelScope.launch { store.setNotifyWeather(on) }
+
+    init {
+        // Mirror every notification toggle into PushModule's in-memory
+        // gates, so the repository polling loops follow the toggles the
+        // moment they change. DataStore stays the source of truth — this
+        // only feeds the loops until AppContainer passes SettingsStore
+        // straight into the repositories (one-line hookup; see PushModule).
+        viewModelScope.launch {
+            combine(
+                store.notifyBreakingFlow,
+                store.notifyMorningFlow,
+                store.notifyEveningFlow,
+                store.notifyWeatherFlow,
+            ) { breaking, morning, evening, weather ->
+                PushModule.updateAll(breaking, morning, evening, weather)
+            }.collect { }
+        }
+    }
 }
 
 @Composable
@@ -85,6 +108,60 @@ private fun ToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = StarBrookColors.onGold,
+                checkedTrackColor = StarBrookColors.gold,
+                uncheckedThumbColor = StarBrookColors.textSecondary,
+                uncheckedTrackColor = StarBrookColors.surfaceVariant,
+            ),
+        )
+    }
+}
+
+/**
+ * Notification toggle (Settings > Notifications only — the edition and
+ * section toggles above keep using ToggleRow). A REAL control: the whole
+ * row is a switch (Role.Switch) with a 48dp minimum touch target, so
+ * tapping anywhere on the row flips it, and the description says exactly
+ * what it does. In-app only: it gates live refresh while the app is
+ * open — it does not send push notifications while the app is closed
+ * (no FCM yet; see PushModule).
+ */
+@Composable
+private fun NotificationToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+        ) {
+            Text(text = label, style = StarBrookType.body, color = StarBrookColors.textPrimary)
+            Text(
+                text = description,
+                style = StarBrookType.bodySmall,
+                color = StarBrookColors.textSecondary,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = StarBrookColors.onGold,
                 checkedTrackColor = StarBrookColors.gold,
@@ -189,10 +266,35 @@ fun SettingsScreen(
         )
         Spacer(modifier = Modifier.height(12.dp))
         SectionHeader(title = "Notifications")
-        ToggleRow("Breaking news", notifyBreaking, onChange = { vm.setNotifyBreaking(it) })
-        ToggleRow("Morning edition", notifyMorning, onChange = { vm.setNotifyMorning(it) })
-        ToggleRow("Evening edition", notifyEvening, onChange = { vm.setNotifyEvening(it) })
-        ToggleRow("Weather alerts", notifyWeather, onChange = { vm.setNotifyWeather(it) })
+        Text(
+            text = "In-app only — these refresh content while the app is open. They do not send push notifications while the app is closed; that needs Firebase, which isn't set up yet.",
+            style = StarBrookType.bodySmall,
+            color = StarBrookColors.textSecondary,
+        )
+        NotificationToggleRow(
+            label = "Breaking news",
+            description = "Checks for breaking news every 5 minutes while the app is open. New breaking shows in the strip on News.",
+            checked = notifyBreaking,
+            onChange = { vm.setNotifyBreaking(it) },
+        )
+        NotificationToggleRow(
+            label = "Morning edition",
+            description = "Re-checks the morning edition every 15 minutes while the app is open, so it lands after its 7:00 AM build without reopening the app.",
+            checked = notifyMorning,
+            onChange = { vm.setNotifyMorning(it) },
+        )
+        NotificationToggleRow(
+            label = "Evening edition",
+            description = "Re-checks the evening edition every 15 minutes while the app is open, so it lands after its 4:00 PM build without reopening the app.",
+            checked = notifyEvening,
+            onChange = { vm.setNotifyEvening(it) },
+        )
+        NotificationToggleRow(
+            label = "Weather alerts",
+            description = "Re-checks National Weather Service alerts every 10 minutes while the Weather screen is open.",
+            checked = notifyWeather,
+            onChange = { vm.setNotifyWeather(it) },
+        )
         Spacer(modifier = Modifier.height(24.dp))
     }
 }

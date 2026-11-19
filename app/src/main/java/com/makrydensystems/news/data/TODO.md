@@ -49,14 +49,16 @@ files. Each item below names what it needs and what v1 does instead.
 ## 5. Push (FCM)
 - **Needs:** a Firebase project (open item — which Google account;
   do NOT create it) + `google-services.json` + the Firebase Messaging
-  dependency. Wiring point: `data/di/PushModule.kt` (stub — comment
-  only, no Firebase imports in v1).
-- **v1 instead:** no push at all. The notification *toggles* in
-  `SettingsStore` (breaking/morning/evening/weather) are stored locally
-  and ready to drive subscriptions the moment FCM lands; until then
-  they change nothing. Breaking/edition freshness still arrives via
-  the quiet background refresh in the repository flows (re-fetch on
-  collect + `refreshAll()`), not via push.
+  dependency. Wiring point: `data/di/PushModule.kt` (in-app engine +
+  FCM topic constants `breaking`/`morning`/`evening`/`weather-alerts`,
+  1:1 with the toggles; no Firebase imports in v1).
+- **v1 instead (Wave 2):** no push while the app is closed. The
+  notification *toggles* in `SettingsStore` now drive real in-app
+  polling while the app is open — breaking re-checks every 5 min,
+  Morning/Evening re-check after their build times every 15 min,
+  weather alerts re-check every 10 min (Weather screen). OFF stops
+  its polling with zero network. Push notifications, badges, and
+  alerts while closed need the FCM project (open item above).
 
 ## 6. Feels-like temperature (minor, NWS)
 - **Needs:** a gridpoint read (`/gridpoints/{office}/{x},{y}` →

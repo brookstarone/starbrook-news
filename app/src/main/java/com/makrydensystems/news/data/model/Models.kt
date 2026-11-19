@@ -18,9 +18,10 @@ import kotlinx.serialization.Transient
 
 // ---------------------------------------------------------------------------
 // Story — edition JSON: {"title","source","excerpt","link","published":ms,
-// "section","image","n"} — "n" is ignored (ignoreUnknownKeys). isOriginal /
-// beat are NOT in the edition JSON; they default off and are filled by the
-// Originals pipeline (TODO.md) when it lands.
+// "section","image","n"} — "n" is the outlet count (trust mark; web
+// fallback is 1 when missing). isOriginal / beat are NOT in the edition
+// JSON; they default off and are filled by the Originals pipeline
+// (TODO.md) when it lands.
 // DEFECT 1 (2026-11-19): the live bucket JSON OMITS "excerpt"/"image" on
 // some stories (morning 2026-11-19 story 13 "Gaten Matarazzo…" has no
 // "image" key at all; evening has two such stories). kotlinx-serialization
@@ -42,6 +43,11 @@ data class Story(
     val image: String? = null,
     val isOriginal: Boolean = false,
     val beat: String? = null,
+    // Outlet count from the edition JSON's "n" key (trust mark — the
+    // card reads "Confirmed by N outlets"). Room column too: the DB
+    // version bump in AppDatabase covers the added column; the cache is
+    // refetchable, so the destructive migration on upgrade is fine.
+    @SerialName("n") val outletCount: Int = 1,
     // Room-only: which edition cache this row belongs to ("morning" /
     // "evening"). NOT part of the network JSON (kotlinx @Transient) and
     // never read by the UI. It is a composite-PK column so the same story

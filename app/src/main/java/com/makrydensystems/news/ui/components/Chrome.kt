@@ -1,8 +1,11 @@
 package com.makrydensystems.news.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,9 +23,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.makrydensystems.news.ui.theme.StarBrookColors
+import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
 
 /** Navigation routes, matching CONTRACT.md. */
@@ -34,49 +42,137 @@ object StarBrookRoutes {
 }
 
 /**
- * The app top bar: Live Star + title, with the slogan under the
- * wordmark on the home screen — the Mix masthead, native. The title
- * is the screen's name ("StarBrook News", "Weather", ...); the
- * tagline only appears with the wordmark, never on inner screens.
+ * The app top bar: the web masthead, native — deep #160F2B, a 3px
+ * gold bottom border, the 32px Live Star, the two-tone wordmark
+ * (STARBROOK white, NEWS gold), the tagline, and a status row with
+ * the green pulsing LIVE dot. The star is a visual logo only: the
+ * portal front door is a raised gold star button in the BOTTOM BAR
+ * (another agent) — never a star button in the masthead.
+ *
+ * On the home screen ([title] == "StarBrook News") the full masthead
+ * renders. Inner screens get the same deep bar + gold border with
+ * their own title. [editionLabel] (e.g. "Morning Edition") and
+ * [sourcesLabel] (e.g. "29 sources") fill the status-row pills when
+ * the caller knows them; MainActivity does not pass them yet, so the
+ * pills stay hidden until the caller is wired.
  */
 @Composable
 fun StarBrookTopBar(
     title: String,
+    editionLabel: String? = null,
+    sourcesLabel: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = StarBrookColors.background,
+        color = StarBrookColors.surfaceVariant,
     ) {
         Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LiveStarMark(size = 36.dp)
-                Column(modifier = Modifier.padding(start = 12.dp)) {
-                    Text(
-                        text = title,
-                        style = StarBrookType.title,
-                        color = StarBrookColors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (title == "StarBrook News") {
+            if (title == "StarBrook News") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LiveStarMark(size = 32.dp)
+                    Column(modifier = Modifier.padding(start = 10.dp)) {
+                        Text(
+                            text = buildAnnotatedString {
+                                withStyle(SpanStyle(color = StarBrookColors.textPrimary)) {
+                                    append("STARBROOK ")
+                                }
+                                withStyle(SpanStyle(color = StarBrookColors.gold)) {
+                                    append("NEWS")
+                                }
+                            },
+                            style = StarBrookType.title.copy(
+                                fontSize = 16.sp,
+                                lineHeight = 18.sp,
+                                letterSpacing = 0.5.sp,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                         Text(
                             text = "In the moment. In the now.",
-                            style = StarBrookType.caption,
+                            style = StarBrookType.label.copy(fontSize = 12.sp),
                             color = StarBrookColors.textSecondary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
+                // Status row (web .live-row): LIVE dot + label, sources
+                // pill, edition chip pinned to the right.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LiveDot(size = 8.dp)
+                    Text(
+                        text = "LIVE",
+                        style = StarBrookType.label.copy(
+                            fontSize = 11.sp,
+                            letterSpacing = 0.9.sp,
+                        ),
+                        color = StarBrookLiveGreen,
+                        maxLines = 1,
+                    )
+                    if (sourcesLabel != null) {
+                        MastheadPill(text = sourcesLabel)
+                    }
+                    if (editionLabel != null) {
+                        Spacer(modifier = Modifier.weight(1f))
+                        MastheadPill(text = editionLabel)
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LiveStarMark(size = 32.dp)
+                    Text(
+                        text = title,
+                        style = StarBrookType.title,
+                        color = StarBrookColors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
             }
-            HorizontalDivider(color = StarBrookColors.border, thickness = 1.dp)
+            HorizontalDivider(color = StarBrookColors.gold, thickness = 3.dp)
         }
+    }
+}
+
+/** Gold pill for the masthead status row (web .sourcespill / .edchip):
+ * gold text on goldsoft, 1px gold border, fully round. */
+@Composable
+private fun MastheadPill(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = StarBrookShapes.chip,
+        color = StarBrookColors.goldsoft,
+        border = BorderStroke(1.dp, StarBrookColors.gold),
+    ) {
+        Text(
+            text = text,
+            style = StarBrookType.label.copy(fontSize = 11.sp),
+            color = StarBrookColors.gold,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
+        )
     }
 }
 

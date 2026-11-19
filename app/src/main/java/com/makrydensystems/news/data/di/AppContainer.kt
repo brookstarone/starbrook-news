@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.room.Room
 import com.makrydensystems.news.data.NewsRepository
 import com.makrydensystems.news.data.NewsRepositoryImpl
+import com.makrydensystems.news.data.PortalAuth
+import com.makrydensystems.news.data.PortalRepository
 import com.makrydensystems.news.data.SettingsStore
+import com.makrydensystems.news.data.StarBrookApi
 import com.makrydensystems.news.data.WeatherRepository
 import com.makrydensystems.news.data.WeatherRepositoryImpl
 import com.makrydensystems.news.data.local.AppDatabase
@@ -50,7 +53,25 @@ class AppContainer(context: Context) {
 
     val settingsStore: SettingsStore = SettingsStore(appContext)
 
-    val newsRepository: NewsRepository = NewsRepositoryImpl(okHttpClient, database)
+    val portalAuth: PortalAuth = PortalAuth(okHttpClient, settingsStore)
 
-    val weatherRepository: WeatherRepository = WeatherRepositoryImpl(okHttpClient)
+    val portalRepository: PortalRepository =
+        PortalRepository(okHttpClient, portalAuth, settingsStore, database)
+
+    // Merge hookups (Wave 2): the repositories take the SettingsStore so
+    // the notification toggles gate real in-app polling (breaking 5m,
+    // editions 15m, weather alerts 10m) instead of the PushModule
+    // in-memory fallback; and the Supabase anon key (BuildConfig from
+    // env — blank in a build without the CI secret) so the Originals
+    // PostgREST fetch + short-code resolution work. Blank key -> null,
+    // so Originals stay hidden rather than failing.
+    val newsRepository: NewsRepository = NewsRepositoryImpl(
+        okHttpClient,
+        database,
+        settingsStore,
+        StarBrookApi.SUPABASE_ANON_KEY.takeIf { it.isNotBlank() },
+    )
+
+    val weatherRepository: WeatherRepository =
+        WeatherRepositoryImpl(okHttpClient, settingsStore)
 }

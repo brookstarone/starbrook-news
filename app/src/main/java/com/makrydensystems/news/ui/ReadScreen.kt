@@ -1,5 +1,6 @@
 package com.makrydensystems.news.ui
 
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,6 +28,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import coil.compose.AsyncImage
+import com.makrydensystems.news.data.ExtractResult
 import com.makrydensystems.news.data.NewsRepository
 import com.makrydensystems.news.data.di.AppContainer
 import com.makrydensystems.news.data.model.Story
@@ -40,39 +43,251 @@ import com.makrydensystems.news.ui.theme.StarBrookType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 private sealed interface ReadState {
     data object Loading : ReadState
-    data class Found(val story: Story) : ReadState
+
+    /** Story found, with its body state. `byline` is the stored Original byline when one exists; otherwise the byline is built from the beat. */
+    data class Found(
+        val story: Story,
+        val body: BodyState,
+        val articleUrl: String?,
+        val byline: String? = null,
+    ) : ReadState
+
+    /**
+     * The story/URL is known but the source would not share the full
+     * text (blocked / paywalled / too short). Distinct from [Missing]:
+     * there IS something to read at the source, so this state always
+     * carries the "Read at [source]" link. Never a dead error.
+     */
+    data class Unavailable(
+        val title: String,
+        val articleUrl: String?,
+        val source: String?,
+    ) : ReadState
+
+    /** No story in any cache and no usable URL — nothing to show but retry. */
     data object Missing : ReadState
 }
+
+private sealed interface BodyState {
+    /** No full body and no article URL to fetch one from — excerpt only. */
+    data object None : BodyState
+
+    /** Full body paragraphs (extracted live, or stored in the Original row). */
+    data class Ready(val paragraphs: List<String>) : BodyState
+
+    /** Extraction was attempted and failed — excerpt plus a "Read at source" link. */
+    data object Unavailable : BodyState
+}
+
+/** What an incoming read link can carry: a direct article URL, a read-page ?u= / ?original=, or a /n/<code> short code. */
+private data class ParsedReadLink(
+    val articleUrl: String?,
+    val originalId: String?,
+    val shortCode: String?,
+)
+
+private fun parseReadLink(rawLink: String): ParsedReadLink {
+    val trimmed = rawLink.trim()
+    if (trimmed.isBlank()) return ParsedReadLink(null, null, null)
+    val uri = runCatching { Uri.parse(trimmed) }.getOrNull()
+    val host = uri?.host?.lowercase().orEmpty()
+    val path = uri?.path.orEmpty()
+    if ("makrydensystems.com" in host) {
+        if ("/news/read" in path) {
+            return ParsedReadLink(
+                articleUrl = uri?.getQueryParameter("u")?.takeIf { it.isNotBlank() },
+                originalId = uri?.getQueryParameter("original")?.takeIf { it.isNotBlank() },
+                shortCode = null,
+            )
+        }
+        val code = Regex("^/n/([A-Za-z0-9]{8})$").find(path)?.groupValues?.getOrNull(1)
+        if (code != null) return ParsedReadLink(null, null, code)
+    }
+    return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+        ParsedReadLink(trimmed, null, null)
+    } else {
+        ParsedReadLink(null, null, null)
+    }
+}
+
+/** Same article ignoring tracking query params (?traffic_source=rss etc.) and fragments. */
+private fun stripQuery(url: String): String =
+    url.substringBefore('?').substringBefore('#').trimEnd('/')
+
+private fun sameArticleUrl(a: String, b: String): Boolean =
+    a.isNotBlank() && b.isNotBlank() && stripQuery(a) == stripQuery(b)
+
+private fun hostLabel(articleUrl: String): String =
+    runCatching { Uri.parse(articleUrl).host }.getOrNull()
+        ?.removePrefix("www.").orEmpty().ifBlank { "the source" }
+
+private fun paragraphsOf(body: String): List<String> =
+    body.split(Regex("\\n\\s*\\n")).map { it.trim() }.filter { it.isNotEmpty() }
 
 private class ReadViewModel(
     private val repo: NewsRepository,
     private val link: String,
     private val title: String,
 ) : ViewModel() {
-    val state: StateFlow<ReadState> = combine(
-        repo.editionsFlow("morning"),
-        repo.editionsFlow("evening"),
-    ) { morning, evening ->
-        val stories = morning + evening
-        val found = stories.firstOrNull { it.link == link }
-            ?: stories.firstOrNull { it.title.equals(title, ignoreCase = true) }
-        when {
-            found != null -> ReadState.Found(found)
-            // Both editions still empty = still loading, not missing.
-            // Editions always carry stories once loaded.
-            stories.isEmpty() -> ReadState.Loading
-            else -> ReadState.Missing
+    // Retry trigger (same one-shot-flow defect Wave 1 fixed on Home):
+    // editionsFlow is a one-shot `flow {}` builder — each collect runs
+    // once (cache, then one refresh) and completes — so a bare
+    // repo.refreshAll() writing fresh rows to Room never re-emitted and
+    // the old Try again button re-fetched into the void. Bumping this
+    // tick re-runs the whole resolution below, which re-collects the
+    // flows and re-attempts extraction. Every Try again taps refresh().
+    private val refreshTick = MutableStateFlow(0)
+
+    val state: StateFlow<ReadState> = refreshTick
+        .flatMapLatest { resolve() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReadState.Loading)
+
+    private fun resolve(): kotlinx.coroutines.flow.Flow<ReadState> = flow {
+        emit(ReadState.Loading)
+        emit(resolveOnce())
+    }.flowOn(Dispatchers.IO)
+
+    /**
+     * Resolution order (mirrors the web Shelf read view: stored text
+     * first, live fallback, distinct unavailable state):
+     *  1. Edition caches (morning + evening) — exact link, query-
+     *     stripped link, then title.
+     *  2. Saved row (stored excerpt) — same matching.
+     *  3. Original row (stored FULL body) for ?original= links, and
+     *     /n/<code> short codes (their row carries the article URL).
+     *  4. Live story-body-extract call on the article URL — this is
+     *     what rescues breaking/live taps, whose URLs are usually NOT
+     *     in today's editions (verified live 2026-11-19: the Al
+     *     Jazeera breaking URL is in neither edition, title unmatched,
+     *     but extraction returns 2,439 chars).
+     *  5. Honest [ReadState.Unavailable] when extraction is blocked,
+     *     with the Read Original link — never a dead error.
+     * `first()` on editionsFlow takes the warm cache emission when
+     * there is one (instant standard); a cold cache waits for the
+     * post-refresh emission. Home's own collection keeps the cache
+     * warm while the app is open.
+     */
+    private suspend fun resolveOnce(): ReadState {
+        val parsed = parseReadLink(link)
+        val articleUrl = parsed.articleUrl
+
+        val cached = runCatching {
+            val morning = runCatching { repo.editionsFlow("morning").first() }.getOrNull().orEmpty()
+            val evening = runCatching { repo.editionsFlow("evening").first() }.getOrNull().orEmpty()
+            (morning + evening).firstOrNull { story ->
+                story.link == link ||
+                    (articleUrl != null &&
+                        (story.link == articleUrl || sameArticleUrl(story.link, articleUrl))) ||
+                    (title.isNotBlank() && story.title.equals(title, ignoreCase = true))
+            }
+        }.getOrNull()
+
+        val saved = if (cached != null) {
+            null
+        } else {
+            runCatching { repo.savedFlow().first() }.getOrNull()
+                ?.firstOrNull { row ->
+                    row.link == link ||
+                        (articleUrl != null &&
+                            (row.link == articleUrl || sameArticleUrl(row.link, articleUrl)))
+                }
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReadState.Loading)
+
+        val original = if (parsed.originalId != null) {
+            runCatching { repo.fetchOriginal(parsed.originalId) }.getOrNull()
+        } else {
+            null
+        }
+
+        val shortCodeStory = if (parsed.shortCode != null) {
+            runCatching { repo.resolveShortCode(parsed.shortCode) }.getOrNull()
+        } else {
+            null
+        }
+
+        // An Original row carries its stored full body: no extraction call.
+        // articleUrl stays the read page's ?u= (usually absent for
+        // Originals) — the story link itself is the read page, not the
+        // source article, so it must never be offered as "Read at source".
+        if (original != null) {
+            return ReadState.Found(
+                story = original.story,
+                body = BodyState.Ready(paragraphsOf(original.body)),
+                articleUrl = parsed.articleUrl,
+                byline = original.byline,
+            )
+        }
+
+        val story = cached ?: saved ?: shortCodeStory
+        val resolvedArticleUrl = articleUrl ?: shortCodeStory?.link
+        if (story != null && resolvedArticleUrl != null) {
+            return when (val extracted = extract(resolvedArticleUrl)) {
+                is ExtractResult.Ok -> ReadState.Found(
+                    story = story,
+                    body = BodyState.Ready(paragraphsOf(extracted.body)),
+                    articleUrl = resolvedArticleUrl,
+                )
+                is ExtractResult.Unavailable -> ReadState.Found(
+                    story = story,
+                    body = BodyState.Unavailable,
+                    articleUrl = resolvedArticleUrl,
+                )
+            }
+        }
+        if (story != null) {
+            return ReadState.Found(
+                story = story,
+                body = BodyState.None,
+                articleUrl = null,
+            )
+        }
+        if (resolvedArticleUrl != null) {
+            return when (val extracted = extract(resolvedArticleUrl)) {
+                is ExtractResult.Ok -> ReadState.Found(
+                    story = synthesizedStory(resolvedArticleUrl, extracted.body),
+                    body = BodyState.Ready(paragraphsOf(extracted.body)),
+                    articleUrl = resolvedArticleUrl,
+                )
+                is ExtractResult.Unavailable -> ReadState.Unavailable(
+                    title = title.ifBlank { hostLabel(resolvedArticleUrl) },
+                    articleUrl = resolvedArticleUrl,
+                    source = hostLabel(resolvedArticleUrl),
+                )
+            }
+        }
+        return ReadState.Missing
+    }
+
+    private suspend fun extract(articleUrl: String): ExtractResult =
+        runCatching { repo.extractBody(articleUrl) }
+            .getOrElse { ExtractResult.Unavailable(it.message) }
+
+    /** A story shell for a URL no cache knows: title from the nav arg, source = the article host, excerpt = the body's first paragraph. */
+    private fun synthesizedStory(articleUrl: String, body: String): Story {
+        val firstPara = paragraphsOf(body).firstOrNull().orEmpty()
+        return Story(
+            title = title.ifBlank { hostLabel(articleUrl) },
+            source = hostLabel(articleUrl),
+            excerpt = firstPara.take(200),
+            link = articleUrl,
+            published = 0L,
+            section = "national",
+            image = null,
+        )
+    }
 
     // Saved state follows the FOUND story's link (breaking/live taps
     // arrive with a read-page URL; the saved row is keyed by the
@@ -92,6 +307,7 @@ private class ReadViewModel(
     }
 
     fun refresh() {
+        refreshTick.value += 1
         viewModelScope.launch { runCatching { repo.refreshAll() } }
     }
 }
@@ -108,10 +324,13 @@ private fun formatStoryTime(publishedMillis: Long): String {
 }
 
 /**
- * Native read view (v1): everything the edition JSON carries — title,
- * source + time, hero image, excerpt, Original badge + byline. The
- * full extracted article body lands with the body-extraction step
- * (see data/TODO.md); v1 never opens a WebView.
+ * Native read view: title, source + time, hero image, and the FULL
+ * article body — extracted live via story-body-extract, or stored in
+ * the row for StarBrook Originals. When extraction is blocked the
+ * excerpt stays plus a "Read at [source]" link (opened in the
+ * browser — no WebView anywhere in the app). A story no cache knows
+ * still resolves through live extraction; only a blocked source with
+ * no stored text lands on the honest unavailable state.
  */
 @Composable
 fun ReadScreen(
@@ -131,6 +350,7 @@ fun ReadScreen(
     val state by vm.state.collectAsState()
     val isSaved by vm.isSaved.collectAsState()
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = modifier
@@ -152,6 +372,42 @@ fun ReadScreen(
                 message = "This story isn't in today's editions yet — it may have just landed. Try again in a moment.",
                 onRetry = { vm.refresh() },
             )
+            is ReadState.Unavailable -> {
+                if (s.title.isNotBlank()) {
+                    Text(
+                        text = s.title,
+                        style = StarBrookType.display,
+                        color = StarBrookColors.textPrimary,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Text(
+                    text = "The source wouldn't share the full text of this story — it may be paywalled or blocking readers.",
+                    style = StarBrookType.body,
+                    color = StarBrookColors.textSecondary,
+                )
+                if (s.articleUrl != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Read at ${s.source ?: "the source"} ›",
+                        style = StarBrookType.label,
+                        color = StarBrookColors.gold,
+                        modifier = Modifier
+                            .padding(vertical = 12.dp)
+                            .clickable { uriHandler.openUri(s.articleUrl) },
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Try again",
+                    style = StarBrookType.label,
+                    color = StarBrookColors.gold,
+                    modifier = Modifier
+                        .padding(vertical = 12.dp)
+                        .clickable { vm.refresh() },
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+            }
             is ReadState.Found -> {
                 val story = s.story
                 if (story.isOriginal) {
@@ -164,15 +420,22 @@ fun ReadScreen(
                     color = StarBrookColors.textPrimary,
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+                val time = formatStoryTime(story.published)
                 Text(
-                    text = "${story.source} · ${formatStoryTime(story.published)}",
+                    text = if (time.isBlank()) story.source else "${story.source} · $time",
                     style = StarBrookType.caption,
                     color = StarBrookColors.textSecondary,
                 )
                 if (story.isOriginal) {
                     Spacer(modifier = Modifier.height(4.dp))
+                    // Stored byline when the Original row carried one
+                    // (already cased: "… — Oklahoma Desk. Edited by
+                    // CADE."); otherwise build it from the beat.
+                    val desk = (story.beat ?: story.section)
+                        .replaceFirstChar { it.uppercaseChar() }
                     Text(
-                        text = "Reported by the StarBrook Newsroom — ${story.beat ?: story.section} Desk. Edited by CADE.",
+                        text = s.byline
+                            ?: "Reported by the StarBrook Newsroom — $desk Desk. Edited by CADE.",
                         style = StarBrookType.caption,
                         color = StarBrookColors.textSecondary,
                     )
@@ -195,17 +458,81 @@ fun ReadScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                if (!story.excerpt.isNullOrBlank()) {
-                    Text(
-                        text = story.excerpt,
-                        style = StarBrookType.body,
-                        color = StarBrookColors.textPrimary,
-                    )
-                } else {
-                    EmptyState(
-                        title = "Story summary coming",
-                        body = "The full text of this story arrives with the next update.",
-                    )
+                when (val body = s.body) {
+                    is BodyState.Ready -> {
+                        if (body.paragraphs.isEmpty()) {
+                            // Stored body was blank: fall back to excerpt.
+                            if (!story.excerpt.isNullOrBlank()) {
+                                Text(
+                                    text = story.excerpt,
+                                    style = StarBrookType.body,
+                                    color = StarBrookColors.textPrimary,
+                                )
+                            } else {
+                                EmptyState(
+                                    title = "Story text coming",
+                                    body = "The full text of this story arrives with the next update.",
+                                )
+                            }
+                        } else {
+                            body.paragraphs.forEach { paragraph ->
+                                Text(
+                                    text = paragraph,
+                                    style = StarBrookType.body,
+                                    color = StarBrookColors.textPrimary,
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                        }
+                    }
+                    is BodyState.Unavailable -> {
+                        if (!story.excerpt.isNullOrBlank()) {
+                            Text(
+                                text = story.excerpt,
+                                style = StarBrookType.body,
+                                color = StarBrookColors.textPrimary,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                        Text(
+                            text = "The full text couldn't be loaded from the source — it may be paywalled or blocking readers.",
+                            style = StarBrookType.bodySmall,
+                            color = StarBrookColors.textSecondary,
+                        )
+                        if (s.articleUrl != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Read at ${story.source} ›",
+                                style = StarBrookType.label,
+                                color = StarBrookColors.gold,
+                                modifier = Modifier
+                                    .padding(vertical = 12.dp)
+                                    .clickable { uriHandler.openUri(s.articleUrl) },
+                            )
+                        }
+                        Text(
+                            text = "Try again",
+                            style = StarBrookType.label,
+                            color = StarBrookColors.gold,
+                            modifier = Modifier
+                                .padding(vertical = 12.dp)
+                                .clickable { vm.refresh() },
+                        )
+                    }
+                    is BodyState.None -> {
+                        if (!story.excerpt.isNullOrBlank()) {
+                            Text(
+                                text = story.excerpt,
+                                style = StarBrookType.body,
+                                color = StarBrookColors.textPrimary,
+                            )
+                        } else {
+                            EmptyState(
+                                title = "Story summary coming",
+                                body = "The full text of this story arrives with the next update.",
+                            )
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(

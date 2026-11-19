@@ -1,8 +1,8 @@
 package com.makrydensystems.news.ui
 
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,10 +12,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -65,8 +69,10 @@ import kotlin.math.ln
 import kotlin.math.tan
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -92,8 +98,15 @@ private class WeatherViewModel(
     private val repo: WeatherRepository,
     private val settings: SettingsStore,
 ) : ViewModel() {
+    // Retry trigger: the load below only re-runs when the ZIP flow emits,
+    // so a bare retry would do nothing. Bumping this tick re-emits the
+    // SAME stored ZIP — the retry re-fetches without touching the ZIP.
+    // (The old retry called clearZip(), which wiped the ZIP and dumped
+    // the user back at the prompt to retype it.)
+    private val retryTick = MutableStateFlow(0)
+
     val state: kotlinx.coroutines.flow.StateFlow<WeatherState> =
-        settings.zipFlow.flatMapLatest { zip ->
+        combine(settings.zipFlow, retryTick) { zip, _ -> zip }.flatMapLatest { zip ->
             if (zip.isNullOrBlank()) {
                 flowOf<WeatherState>(WeatherState.NeedZip)
             } else {
@@ -101,7 +114,16 @@ private class WeatherViewModel(
                     emit(WeatherState.Loading)
                     val loc = repo.geocodeZip(zip)
                     val bundle = repo.currentAndForecast(loc.lat, loc.lon)
-                    val frames = repo.radarFrames()
+                    // Radar is isolated like alerts (see WeatherRepository
+                    // currentAndForecast): a failed RainViewer fetch must
+                    // not kill the screen — empty frames render the radar
+                    // section's honest unavailable state and the forecast
+                    // stays live.
+                    val frames = try {
+                        repo.radarFrames()
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
                     val today = LocalDate.now(ZoneId.of("America/Chicago")).toString()
                     val videoExists = repo.weatherVideoExists(zip, today, "midday")
                     emit(
@@ -115,6 +137,28 @@ private class WeatherViewModel(
                             lon = loc.lon,
                         ),
                     )
+                    // Live alert re-checks (weather-alerts toggle, Wave 2):
+                    // alertsFlow does one check immediately, then polls NWS
+                    // every 10 min while the toggle is ON and emits only on
+                    // change. Re-emit Ready with the fresh list so alerts
+                    // update without reopening the screen; OFF suspends
+                    // inside the flow and the first-load alerts stay.
+                    repo.alertsFlow(loc.lat, loc.lon).collect { alerts ->
+                        emit(
+                            WeatherState.Ready(
+                                bundle = bundle.copy(
+                                    alerts = alerts,
+                                    alertsAvailable = true,
+                                ),
+                                radarFrames = frames,
+                                videoExists = videoExists,
+                                zip = zip,
+                                placeName = loc.placeName,
+                                lat = loc.lat,
+                                lon = loc.lon,
+                            ),
+                        )
+                    }
                 }.catch {
                     emit(
                         WeatherState.Error(
@@ -127,6 +171,11 @@ private class WeatherViewModel(
 
     fun setZip(zip: String) {
         viewModelScope.launch { settings.setZip(zip) }
+    }
+
+    /** Retry the load for the stored ZIP. The ZIP is never cleared here. */
+    fun retry() {
+        retryTick.value += 1
     }
 
     fun clearZip() {
@@ -284,26 +333,32 @@ fun WeatherScreen(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text(
-                    text = "Save ZIP",
-                    style = StarBrookType.label,
-                    color = if (zipInput.length == 5) StarBrookColors.gold else StarBrookColors.textSecondary,
+                Button(
+                    onClick = {
+                        if (zipInput.length == 5) {
+                            zipError = null
+                            vm.setZip(zipInput)
+                        } else {
+                            zipError = "That doesn't look like a ZIP code — 5 digits."
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = StarBrookColors.gold,
+                        contentColor = StarBrookColors.onGold,
+                    ),
+                    shape = StarBrookShapes.chip,
                     modifier = Modifier
-                        .padding(vertical = 4.dp)
-                        .clickable {
-                            if (zipInput.length == 5) {
-                                zipError = null
-                                vm.setZip(zipInput)
-                            } else {
-                                zipError = "That doesn't look like a ZIP code — 5 digits."
-                            }
-                        },
-                )
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                ) {
+                    Text(text = "Save ZIP", style = StarBrookType.label)
+                }
             }
             is WeatherState.Loading -> SkeletonList(count = 4)
             is WeatherState.Error -> ErrorState(
                 message = s.message,
-                onRetry = { vm.clearZip() },
+                // Retry re-fetches for the stored ZIP — it never clears it.
+                onRetry = { vm.retry() },
             )
             is WeatherState.Ready -> {
                 val bundle = s.bundle
@@ -319,12 +374,17 @@ fun WeatherScreen(
                         style = StarBrookType.title,
                         color = StarBrookColors.textPrimary,
                     )
-                    Text(
-                        text = "Change ZIP",
-                        style = StarBrookType.label,
-                        color = StarBrookColors.gold,
-                        modifier = Modifier.clickable { vm.clearZip() },
-                    )
+                    OutlinedButton(
+                        onClick = { vm.clearZip() },
+                        shape = StarBrookShapes.chip,
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = StarBrookColors.gold,
+                        ),
+                        border = BorderStroke(1.dp, StarBrookColors.gold),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Text(text = "Change ZIP", style = StarBrookType.label)
+                    }
                 }
                 // Current conditions hero card (mirrors the web weather
                 // card: big temp + condition, then a stats grid). NWS
@@ -443,14 +503,7 @@ fun WeatherScreen(
                     Surface(
                         color = StarBrookColors.surface,
                         shape = StarBrookShapes.card,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onPlayVideo(
-                                    videoUrl,
-                                    "StarBrook Weather Midday — ${s.zip}",
-                                )
-                            },
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
                         Row(
                             modifier = Modifier
@@ -463,12 +516,24 @@ fun WeatherScreen(
                                 text = "Midday video for ${s.zip}",
                                 style = StarBrookType.body,
                                 color = StarBrookColors.textPrimary,
+                                modifier = Modifier.weight(1f),
                             )
-                            Text(
-                                text = "▶ Watch",
-                                style = StarBrookType.label,
-                                color = StarBrookColors.gold,
-                            )
+                            Button(
+                                onClick = {
+                                    onPlayVideo(
+                                        videoUrl,
+                                        "StarBrook Weather Midday — ${s.zip}",
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = StarBrookColors.gold,
+                                    contentColor = StarBrookColors.onGold,
+                                ),
+                                shape = StarBrookShapes.chip,
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) {
+                                Text(text = "▶ Watch", style = StarBrookType.label)
+                            }
                         }
                     }
                 } else {
@@ -647,12 +712,20 @@ private fun RadarView(
                 style = StarBrookType.caption,
                 color = StarBrookColors.textSecondary,
             )
-            Text(
-                text = if (playing) "❚❚ Pause" else "▶ Play loop",
-                style = StarBrookType.label,
-                color = StarBrookColors.gold,
-                modifier = Modifier.clickable { playing = !playing },
-            )
+            OutlinedButton(
+                onClick = { playing = !playing },
+                shape = StarBrookShapes.chip,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = StarBrookColors.gold,
+                ),
+                border = BorderStroke(1.dp, StarBrookColors.gold),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                Text(
+                    text = if (playing) "❚❚ Pause" else "▶ Play loop",
+                    style = StarBrookType.label,
+                )
+            }
         }
         Text(
             text = "Map © OpenStreetMap contributors · Radar: RainViewer",

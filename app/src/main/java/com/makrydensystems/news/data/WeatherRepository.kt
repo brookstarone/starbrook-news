@@ -7,9 +7,18 @@ import com.makrydensystems.news.data.model.WeatherAlert
 import com.makrydensystems.news.data.model.RadarFrame
 import com.makrydensystems.news.data.model.WeatherBundle
 import com.makrydensystems.news.data.model.ZipLocation
+import com.makrydensystems.news.data.di.PushModule
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -26,11 +35,22 @@ import java.io.IOException
 // ---------------------------------------------------------------------------
 private const val NWS_USER_AGENT = "StarBrookNews/1.0 (makrydensystems.com)"
 private const val ZIPCODE_USER_AGENT = "StarBrookNews/1.0 (Android)"
+// Notification-toggle polling (PushModule): NWS alerts re-check interval
+// while the Weather screen's alerts flow is collected (app open on
+// Weather). OFF suspends the loop on the gate — zero network until the
+// toggle comes back ON.
+private const val ALERTS_POLL_MS = 10L * 60 * 1000 // NWS alerts every 10 min
 
 interface WeatherRepository {
     suspend fun geocodeZip(zip: String): ZipLocation
     suspend fun currentAndForecast(lat: Double, lon: Double): WeatherBundle
     suspend fun alerts(lat: Double, lon: Double): List<WeatherAlert>
+    // Live alerts feed for the Weather screen: emits the current alerts,
+    // then re-checks NWS on ALERTS_POLL_MS while collected AND the
+    // weather-alerts toggle is ON. Emits only when the alert list
+    // actually changed. A failed check keeps the last list (never an
+    // error surface); OFF suspends with zero network.
+    fun alertsFlow(lat: Double, lon: Double): Flow<List<WeatherAlert>>
     suspend fun radarFrames(): List<RadarFrame>
     fun radarTileUrl(frame: RadarFrame, z: Int, x: Int, y: Int): String
     suspend fun weatherVideoExists(zip: String, date: String, slot: String): Boolean
@@ -129,6 +149,12 @@ private data class RainViewerFrame(
 
 class WeatherRepositoryImpl(
     private val client: OkHttpClient,
+    // Notification toggle (SettingsStore, DataStore-backed). Nullable so
+    // v1 still compiles before AppContainer passes it in — until then the
+    // PushModule in-memory gate (mirrored from the store by
+    // SettingsScreen) is the fallback. Either way the gate default
+    // matches the store: weather alerts off.
+    private val settings: SettingsStore? = null,
 ) : WeatherRepository {
 
     private val json = Json {
@@ -235,6 +261,40 @@ class WeatherRepositoryImpl(
                 )
             }
         }
+
+    override fun alertsFlow(lat: Double, lon: Double): Flow<List<WeatherAlert>> = flow {
+        val enabled = settings?.notifyWeatherFlow ?: PushModule.weatherAlertsEnabled
+        var last: List<WeatherAlert>? = null
+        try {
+            last = alerts(lat, lon)
+            emit(last)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // No alerts yet and the check failed: emit nothing — the
+            // Weather screen keeps its own "couldn't check" state from
+            // currentAndForecast. The poll loop below retries.
+        }
+        while (currentCoroutineContext().isActive) {
+            if (!enabled.first()) {
+                enabled.first { it }
+                continue
+            }
+            delay(ALERTS_POLL_MS)
+            if (!enabled.first()) continue
+            try {
+                val fresh = alerts(lat, lon)
+                if (fresh != last) {
+                    last = fresh
+                    emit(fresh)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Failed poll: keep the last list; next poll retries.
+            }
+        }
+    }.flowOn(Dispatchers.IO)
 
     override suspend fun radarFrames(): List<RadarFrame> = withContext(Dispatchers.IO) {
         val text = getText(

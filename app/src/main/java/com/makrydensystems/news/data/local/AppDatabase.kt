@@ -28,7 +28,9 @@ import kotlinx.coroutines.flow.Flow
         BriefingVideo::class, // videos
         SavedStoryEntity::class, // saved_stories (Shelf, local only in v1)
     ],
-    version = 1,
+    // v2 (Wave 2): Story gains the outletCount column (edition JSON "n").
+    // Destructive migration wipes the refetchable cache on upgrade.
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

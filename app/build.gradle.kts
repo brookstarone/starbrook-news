@@ -27,6 +27,18 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        // Portal sign-in: the Supabase anon key, fed from the
+        // SUPABASE_ANON_KEY env var or the -PsupabaseAnonKey gradle
+        // property. The key is the same publishable key the web portal
+        // ships in its own JS — but it still never belongs in a committed
+        // file. Empty means sign-in is unavailable in that build and the
+        // Hub says so instead of failing mysteriously.
+        buildConfigField(
+            "String",
+            "SUPABASE_ANON_KEY",
+            "\"" + (project.findProperty("supabaseAnonKey") as String?
+                ?: System.getenv("SUPABASE_ANON_KEY") ?: "") + "\"",
+        )
     }
 
     signingConfigs {
@@ -75,6 +87,12 @@ android {
 
     buildFeatures {
         compose = true
+        // Portal sign-in needs the Supabase anon key (TODO.md: pass via a
+        // BuildConfig field from env, NEVER commit the key). Fed from the
+        // SUPABASE_ANON_KEY env var or the -PsupabaseAnonKey gradle
+        // property; empty means sign-in is unavailable in that build and
+        // the Hub says so instead of failing mysteriously.
+        buildConfig = true
     }
     // No composeOptions block: the Kotlin Compose plugin (above) supplies
     // the compiler at the Kotlin version. The old
