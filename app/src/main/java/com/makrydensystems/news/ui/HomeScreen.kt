@@ -45,6 +45,7 @@ import com.makrydensystems.news.ui.components.VideoCard
 import com.makrydensystems.news.ui.theme.StarBrookColors
 import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -59,22 +60,35 @@ private class HomeViewModel(
     val edition: StateFlow<String> = settings.editionFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "morning")
 
-    val stories: StateFlow<FeedState<List<Story>>> = edition
-        .flatMapLatest { repo.editionsFlow(it) }
+    // Retry trigger (DEFECT 1, design-audit gap #5): the feed flows below
+    // are one-shot `flow {}` builders — each runs once (cache, then one
+    // refresh) and completes, and the DAO reads are suspend one-shots, not
+    // observable Flows. So repo.refreshAll() writing fresh rows to Room
+    // never re-emitted: the Try again button re-fetched into the void and
+    // the ErrorState stayed forever. Bumping this tick re-collects the
+    // flows, which re-runs the fetch and emits the new result. Every
+    // Try again on this screen taps refresh() below.
+    private val refreshTick = MutableStateFlow(0)
+
+    val stories: StateFlow<FeedState<List<Story>>> = refreshTick
+        .flatMapLatest { edition.flatMapLatest { repo.editionsFlow(it) } }
         .combine(settings.sectionsFlow) { list, enabled ->
             list.filter { story -> story.section.lowercase() in enabled }
         }
         .asFeedState()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FeedState.Loading)
 
-    val breaking = repo.breakingFlow()
+    val breaking = refreshTick
+        .flatMapLatest { repo.breakingFlow() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val liveNow = repo.liveNowFlow()
+    val liveNow = refreshTick
+        .flatMapLatest { repo.liveNowFlow() }
         .asFeedState()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FeedState.Loading)
 
-    val videos = repo.videosFlow()
+    val videos = refreshTick
+        .flatMapLatest { repo.videosFlow() }
         .asFeedState()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FeedState.Loading)
 
@@ -83,9 +97,7 @@ private class HomeViewModel(
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            runCatching { repo.refreshAll() }
-        }
+        refreshTick.value += 1
     }
 }
 

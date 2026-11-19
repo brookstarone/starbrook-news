@@ -1,6 +1,7 @@
 package com.makrydensystems.news.ui
 
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,7 +29,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -51,7 +54,9 @@ import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
 import java.text.SimpleDateFormat
 import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import kotlin.math.PI
@@ -77,6 +82,7 @@ private sealed interface WeatherState {
         val radarFrames: List<RadarFrame>,
         val videoExists: Boolean,
         val zip: String,
+        val placeName: String,
         val lat: Double,
         val lon: Double,
     ) : WeatherState
@@ -93,8 +99,8 @@ private class WeatherViewModel(
             } else {
                 flow {
                     emit(WeatherState.Loading)
-                    val (lat, lon) = repo.geocodeZip(zip)
-                    val bundle = repo.currentAndForecast(lat, lon)
+                    val loc = repo.geocodeZip(zip)
+                    val bundle = repo.currentAndForecast(loc.lat, loc.lon)
                     val frames = repo.radarFrames()
                     val today = LocalDate.now(ZoneId.of("America/Chicago")).toString()
                     val videoExists = repo.weatherVideoExists(zip, today, "midday")
@@ -104,8 +110,9 @@ private class WeatherViewModel(
                             radarFrames = frames,
                             videoExists = videoExists,
                             zip = zip,
-                            lat = lat,
-                            lon = lon,
+                            placeName = loc.placeName,
+                            lat = loc.lat,
+                            lon = loc.lon,
                         ),
                     )
                 }.catch {
@@ -143,9 +150,84 @@ private fun formatRadarTime(epochSeconds: Long): String {
 }
 
 /**
+ * "2026-11-19T13:00:00-06:00" (NWS hourly startTime) -> "1 PM".
+ * Unparsable input falls back to the raw string — never crashes.
+ */
+private fun formatHourLabel(iso: String): String {
+    return try {
+        OffsetDateTime.parse(iso)
+            .format(DateTimeFormatter.ofPattern("h a", Locale.US))
+    } catch (e: Exception) {
+        iso
+    }
+}
+
+/**
+ * "2026-11-19" (daily forecast date) -> "Thu, Nov 19".
+ * Unparsable input falls back to the raw string — never crashes.
+ */
+private fun formatDayLabel(date: String): String {
+    return try {
+        LocalDate.parse(date)
+            .format(DateTimeFormatter.ofPattern("EEE, MMM d", Locale.US))
+    } catch (e: Exception) {
+        date
+    }
+}
+
+/** "68° / 53°" for today, or "—" when NWS gives neither. */
+private fun todayHighLow(bundle: WeatherBundle): String {
+    val today = bundle.daily.firstOrNull() ?: return "—"
+    return buildString {
+        today.highF?.let { append("$it°") }
+        if (today.highF != null && today.lowF != null) append(" / ")
+        today.lowF?.let { append("$it°") }
+    }.ifEmpty { "—" }
+}
+
+/**
+ * Expected-rain line from the NWS hourly precipitation chances (next
+ * 12 hours). Honest about all three states: no data, no rain, rain.
+ */
+private fun expectedRainText(bundle: WeatherBundle): String {
+    val next = bundle.hourly.take(12)
+    val chances = next.mapNotNull { it.precipitationChancePct }
+    if (chances.isEmpty()) return "Rain outlook unavailable right now."
+    val max = chances.max()
+    if (max <= 0) return "No rain expected in the next 12 hours."
+    val peak = next.firstOrNull { it.precipitationChancePct == max }
+    val whenText = peak?.let { " around ${formatHourLabel(it.startTime)}" } ?: ""
+    return "Highest chance of rain: $max%$whenText."
+}
+
+/** One cell of the hero stats grid: small label over the value. */
+@Composable
+private fun StatCell(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(
+            text = label,
+            style = StarBrookType.caption,
+            color = StarBrookColors.textSecondary,
+        )
+        Text(
+            text = value,
+            style = StarBrookType.body,
+            color = StarBrookColors.textPrimary,
+        )
+    }
+}
+/** OpenStreetMap base-map tile — the map the RainViewer radar sits on. */
+private fun baseMapTileUrl(z: Int, x: Int, y: Int): String =
+    "https://tile.openstreetmap.org/$z/$x/$y.png"
+
+/**
  * Weather tab (v1). NWS only. No ZIP = prompt, no video, no default
- * city — ever. Radar is native RainViewer tiles (3x3 grid, zoom 6)
- * with a play/pause loop; the per-ZIP midday video plays natively.
+ * city — ever. Radar is native RainViewer tiles (3x3 grid, zoom 7) over
+ * an OpenStreetMap base map, with a play/pause loop; the per-ZIP midday
+ * video plays natively.
  */
 @Composable
 fun WeatherScreen(
@@ -233,7 +315,7 @@ fun WeatherScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Weather for ${s.zip}",
+                        text = "Weather for ${s.placeName}",
                         style = StarBrookType.title,
                         color = StarBrookColors.textPrimary,
                     )
@@ -244,47 +326,114 @@ fun WeatherScreen(
                         modifier = Modifier.clickable { vm.clearZip() },
                     )
                 }
-                // Current conditions hero.
+                // Current conditions hero card (mirrors the web weather
+                // card: big temp + condition, then a stats grid). NWS
+                // hourly periods carry no feels-like value, so the grid
+                // shows only stats NWS actually provides — never a
+                // placeholder number. "—" means NWS omitted the value.
+                Surface(
+                    color = StarBrookColors.surface,
+                    shape = StarBrookShapes.card,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text(
+                                text = "${current.temperatureF}°",
+                                style = StarBrookType.display,
+                                color = StarBrookColors.textPrimary,
+                            )
+                            Column {
+                                Text(
+                                    text = current.condition,
+                                    style = StarBrookType.title,
+                                    color = StarBrookColors.textPrimary,
+                                )
+                                Text(
+                                    text = s.placeName,
+                                    style = StarBrookType.bodySmall,
+                                    color = StarBrookColors.textSecondary,
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            StatCell(
+                                label = "Wind",
+                                value = current.windMph?.let {
+                                    "${current.windDirection.orEmpty()} $it mph".trim()
+                                } ?: "—",
+                                modifier = Modifier.weight(1f),
+                            )
+                            StatCell(
+                                label = "Humidity",
+                                value = current.humidityPct?.let { "$it%" } ?: "—",
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            StatCell(
+                                label = "Rain chance",
+                                value = current.precipitationChancePct?.let { "$it%" } ?: "—",
+                                modifier = Modifier.weight(1f),
+                            )
+                            StatCell(
+                                label = "High / Low",
+                                value = todayHighLow(bundle),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+                // Expected rain — NWS precipitation chances, next 12 hours.
+                SectionHeader(title = "Expected rain")
                 Text(
-                    text = "${current.temperatureF}°",
-                    style = StarBrookType.display,
-                    color = StarBrookColors.textPrimary,
-                )
-                Text(
-                    text = current.condition,
-                    style = StarBrookType.title,
-                    color = StarBrookColors.textPrimary,
-                )
-                Text(
-                    text = buildString {
-                        current.feelsLikeF?.let { append("Feels like $it°  ·  ") }
-                        current.windMph?.let { append("Wind ${current.windDirection.orEmpty()} $it mph  ·  ") }
-                        current.humidityPct?.let { append("Humidity $it%") }
-                    },
+                    text = expectedRainText(bundle),
                     style = StarBrookType.bodySmall,
                     color = StarBrookColors.textSecondary,
                 )
-                // Alerts.
-                for (alert in bundle.alerts) {
-                    val severe = alert.severity.equals("Severe", ignoreCase = true) ||
-                        alert.severity.equals("Extreme", ignoreCase = true)
-                    val watch = alert.event.contains("Watch", ignoreCase = true)
-                    Surface(
-                        color = when {
-                            severe -> StarBrookColors.liveRed
-                            watch -> StarBrookColors.gold
-                            else -> StarBrookColors.accentPurple
-                        },
-                        shape = StarBrookShapes.card,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(
-                            text = alert.headline,
-                            style = StarBrookType.bodySmall,
-                            color = if (watch) StarBrookColors.onGold else StarBrookColors.textPrimary,
-                            modifier = Modifier.padding(12.dp),
-                        )
+                // Alerts — a failed alerts fetch must not kill the screen,
+                // and no alerts is a real state, not a blank gap.
+                SectionHeader(title = "Alerts")
+                if (bundle.alerts.isNotEmpty()) {
+                    for (alert in bundle.alerts) {
+                        val severe = alert.severity.equals("Severe", ignoreCase = true) ||
+                            alert.severity.equals("Extreme", ignoreCase = true)
+                        val watch = alert.event.contains("Watch", ignoreCase = true)
+                        Surface(
+                            color = when {
+                                severe -> StarBrookColors.liveRed
+                                watch -> StarBrookColors.gold
+                                else -> StarBrookColors.accentPurple
+                            },
+                            shape = StarBrookShapes.card,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = alert.headline,
+                                style = StarBrookType.bodySmall,
+                                color = if (watch) StarBrookColors.onGold else StarBrookColors.textPrimary,
+                                modifier = Modifier.padding(12.dp),
+                            )
+                        }
                     }
+                } else if (bundle.alertsAvailable) {
+                    Text(
+                        text = "No active weather alerts.",
+                        style = StarBrookType.bodySmall,
+                        color = StarBrookColors.textSecondary,
+                    )
+                } else {
+                    Text(
+                        text = "Couldn't check for weather alerts right now — the forecast above is still live.",
+                        style = StarBrookType.bodySmall,
+                        color = StarBrookColors.textSecondary,
+                    )
                 }
                 // Per-ZIP midday video.
                 if (s.videoExists) {
@@ -322,16 +471,46 @@ fun WeatherScreen(
                             )
                         }
                     }
+                } else {
+                    // Honest empty state: the midday video posts around
+                    // midday — before that there is nothing to play yet,
+                    // so the card says so instead of vanishing.
+                    Surface(
+                        color = StarBrookColors.surface,
+                        shape = StarBrookShapes.card,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = "Midday video for ${s.zip}",
+                                style = StarBrookType.body,
+                                color = StarBrookColors.textPrimary,
+                            )
+                            Text(
+                                text = "Not up yet — the midday video posts around midday. Check back then.",
+                                style = StarBrookType.bodySmall,
+                                color = StarBrookColors.textSecondary,
+                            )
+                        }
+                    }
                 }
-                // Hourly (next 12).
+                // Hourly (next 12). The right text takes the remaining
+                // width and wraps inside it, so it can never run into
+                // the hour label — the 12.dp gap always holds.
                 SectionHeader(title = "Hourly")
                 for (hour in bundle.hourly.take(12)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = hour.startTime,
+                            text = formatHourLabel(hour.startTime),
                             style = StarBrookType.bodySmall,
                             color = StarBrookColors.textPrimary,
                         )
@@ -339,6 +518,8 @@ fun WeatherScreen(
                             text = "${hour.temperatureF}° · ${hour.shortForecast}",
                             style = StarBrookType.bodySmall,
                             color = StarBrookColors.textSecondary,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -347,10 +528,11 @@ fun WeatherScreen(
                 for (day in bundle.daily) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = day.date,
+                            text = formatDayLabel(day.date),
                             style = StarBrookType.bodySmall,
                             color = StarBrookColors.textPrimary,
                         )
@@ -362,6 +544,8 @@ fun WeatherScreen(
                             },
                             style = StarBrookType.bodySmall,
                             color = StarBrookColors.textSecondary,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -402,28 +586,52 @@ private fun RadarView(
             frameIndex = (frameIndex + 1) % loopFrames.size
         }
     }
-    val zoom = 6
+    // Zoom 7 is the closest RainViewer serves: zoom 8+ returns its
+    // "Zoom Level Not Supported" placeholder tile instead of radar
+    // (verified live 2026-11-19). Zoom 6 was continental scale, so even
+    // real rain rendered as a speck.
+    val zoom = 7
     val (cx, cy) = tileXY(lat, lon, zoom)
     val frame = loopFrames[frameIndex]
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(1f),
+                .aspectRatio(1f)
+                .background(StarBrookColors.surface),
             contentAlignment = Alignment.Center,
         ) {
             Column {
                 for (dy in -1..1) {
                     Row {
                         for (dx in -1..1) {
-                            AsyncImage(
-                                model = repo.radarTileUrl(frame, zoom, cx + dx, cy + dy),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
+                            // Base map underneath, radar overlay on top.
+                            // RainViewer tiles are precipitation-only
+                            // transparent PNGs, so without a base map the
+                            // box was bare near-black background with a
+                            // few faint specks — that was the dark/faint
+                            // radar. Overlay at 0.7 opacity, matching the
+                            // live website's radar.
+                            Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .aspectRatio(1f),
-                            )
+                            ) {
+                                AsyncImage(
+                                    model = baseMapTileUrl(zoom, cx + dx, cy + dy),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                AsyncImage(
+                                    model = repo.radarTileUrl(frame, zoom, cx + dx, cy + dy),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .alpha(0.7f),
+                                )
+                            }
                         }
                     }
                 }
@@ -446,5 +654,10 @@ private fun RadarView(
                 modifier = Modifier.clickable { playing = !playing },
             )
         }
+        Text(
+            text = "Map © OpenStreetMap contributors · Radar: RainViewer",
+            style = StarBrookType.caption,
+            color = StarBrookColors.textSecondary,
+        )
     }
 }

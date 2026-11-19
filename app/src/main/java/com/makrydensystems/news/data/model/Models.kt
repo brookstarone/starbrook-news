@@ -21,17 +21,25 @@ import kotlinx.serialization.Transient
 // "section","image","n"} — "n" is ignored (ignoreUnknownKeys). isOriginal /
 // beat are NOT in the edition JSON; they default off and are filled by the
 // Originals pipeline (TODO.md) when it lands.
+// DEFECT 1 (2026-11-19): the live bucket JSON OMITS "excerpt"/"image" on
+// some stories (morning 2026-11-19 story 13 "Gaten Matarazzo…" has no
+// "image" key at all; evening has two such stories). kotlinx-serialization
+// treats a nullable property WITHOUT a default as required — an absent key
+// throws MissingFieldException and kills the WHOLE edition decode. The
+// "= null" defaults on excerpt/image below make an absent key decode to
+// null instead. "title"/"source"/"link"/"published"/"section" stay required:
+// every observed story carries them, and a story without them is unusable.
 // ---------------------------------------------------------------------------
 @Serializable
 @Entity(tableName = "cached_stories", primaryKeys = ["link", "edition"])
 data class Story(
     val title: String,
     val source: String,
-    val excerpt: String?,
+    val excerpt: String? = null,
     val link: String,
     val published: Long, // ms epoch
     val section: String,
-    val image: String?,
+    val image: String? = null,
     val isOriginal: Boolean = false,
     val beat: String? = null,
     // Room-only: which edition cache this row belongs to ("morning" /
@@ -80,10 +88,10 @@ data class LiveItem(
 // "duration":"m:ss","file","poster"}]}.
 // Verified live 2026-11-19: breaking flashes carry explicit "file" +
 // "poster" (bare filenames in the news-videos bucket). Daily morning /
-// evening entries carry NEITHER — the repository derives them web-parity:
-// file = "news-briefing-<date>.mp4", poster = "news-briefing-<date>.jpg"
-// (both verified to exist: range-GET 206 for 2026-11-19 and 2026-11-18;
-// "news-briefing-<date>-evening.mp4" does NOT exist — 400).
+// evening entries carry NEITHER — the repository derives them by edition:
+// morning file = "news-briefing-<date>.mp4", evening file =
+// "news-briefing-<date>-evening.mp4" (posters likewise ".jpg"); both
+// verified to exist live (morning 2026-11-19, evening 2026-11-18).
 // "file" stays a bare bucket filename; the player builds the full URL as
 // storage base + "news-videos/" + file. posterUrl is a full URL.
 // ---------------------------------------------------------------------------

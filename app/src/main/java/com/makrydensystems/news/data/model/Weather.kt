@@ -18,6 +18,9 @@ data class CurrentConditions(
     val windDirection: String?,
     val humidityPct: Int?,
     val iconUrl: String?,
+    // NWS probabilityOfPrecipitation for the current hour (0-100), null
+    // when NWS omits it.
+    val precipitationChancePct: Int?,
 )
 
 data class HourlyPeriod(
@@ -25,6 +28,8 @@ data class HourlyPeriod(
     val temperatureF: Int,
     val shortForecast: String,
     val isDaytime: Boolean,
+    // NWS probabilityOfPrecipitation (0-100), null when NWS omits it.
+    val precipitationChancePct: Int?,
 )
 
 data class DailyForecast(
@@ -33,6 +38,9 @@ data class DailyForecast(
     val lowF: Int?,
     val shortForecast: String,
     val iconUrl: String?,
+    // Highest NWS probabilityOfPrecipitation across the day/night pair
+    // (0-100), null when NWS omits it.
+    val precipitationChancePct: Int?,
 )
 
 data class WeatherAlert(
@@ -48,6 +56,21 @@ data class WeatherBundle(
     val hourly: List<HourlyPeriod>, // next 24 hours
     val daily: List<DailyForecast>, // next 7 days
     val alerts: List<WeatherAlert>,
+    // False when the alerts fetch itself failed — alerts is empty either
+    // way, but the UI tells "couldn't check" apart from "no alerts".
+    // An alerts failure never fails the whole bundle.
+    val alertsAvailable: Boolean,
+)
+
+/**
+ * A ZIP resolved to coordinates + a human place name ("Oklahoma City,
+ * OK"), from Zippopotam. The weather header shows the place name, never
+ * a bare ZIP.
+ */
+data class ZipLocation(
+    val lat: Double,
+    val lon: Double,
+    val placeName: String,
 )
 
 /**

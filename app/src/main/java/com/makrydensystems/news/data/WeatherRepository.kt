@@ -6,10 +6,12 @@ import com.makrydensystems.news.data.model.HourlyPeriod
 import com.makrydensystems.news.data.model.WeatherAlert
 import com.makrydensystems.news.data.model.RadarFrame
 import com.makrydensystems.news.data.model.WeatherBundle
+import com.makrydensystems.news.data.model.ZipLocation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -26,7 +28,7 @@ private const val NWS_USER_AGENT = "StarBrookNews/1.0 (makrydensystems.com)"
 private const val ZIPCODE_USER_AGENT = "StarBrookNews/1.0 (Android)"
 
 interface WeatherRepository {
-    suspend fun geocodeZip(zip: String): Pair<Double, Double>
+    suspend fun geocodeZip(zip: String): ZipLocation
     suspend fun currentAndForecast(lat: Double, lon: Double): WeatherBundle
     suspend fun alerts(lat: Double, lon: Double): List<WeatherAlert>
     suspend fun radarFrames(): List<RadarFrame>
@@ -36,7 +38,7 @@ interface WeatherRepository {
 
 // --- Wire DTOs (private; nullable everywhere — NWS omits fields freely) ---
 
-/** api.zippopotam.us — verified: {"places":[{"latitude":"35.4726","longitude":"-97.5199",...}]} (lat/lon are STRINGS). 404 body is {}. */
+/** api.zippopotam.us — verified: {"places":[{"latitude":"35.4726","longitude":"-97.5199","place name":"Oklahoma City","state abbreviation":"OK",...}]} (lat/lon are STRINGS). 404 body is {}. */
 @Serializable
 private data class ZipResponse(val places: List<ZipPlace> = emptyList())
 
@@ -44,6 +46,8 @@ private data class ZipResponse(val places: List<ZipPlace> = emptyList())
 private data class ZipPlace(
     val latitude: String = "",
     val longitude: String = "",
+    @SerialName("place name") val placeName: String = "",
+    @SerialName("state abbreviation") val stateAbbreviation: String = "",
 )
 
 @Serializable
@@ -67,6 +71,9 @@ private data class ForecastProperties(val periods: List<NwsPeriod> = emptyList()
  * temperatureUnit/windSpeed ("10 mph")/windDirection/icon/shortForecast/
  * detailedForecast/probabilityOfPrecipitation; hourly adds dewpoint +
  * relativeHumidity {"value": 67}. temperatureTrend is routinely null.
+ * probabilityOfPrecipitation.value is 0-100 (percent), or null when NWS
+ * omits it. quantitativePrecipitation is routinely null — PoP is the
+ * rain signal, not inches.
  */
 @Serializable
 private data class NwsPeriod(
@@ -78,6 +85,7 @@ private data class NwsPeriod(
     val shortForecast: String? = null,
     val icon: String? = null,
     val relativeHumidity: NwsQuantity? = null,
+    val probabilityOfPrecipitation: NwsQuantity? = null,
 )
 
 @Serializable
@@ -128,7 +136,7 @@ class WeatherRepositoryImpl(
         coerceInputValues = true
     }
 
-    override suspend fun geocodeZip(zip: String): Pair<Double, Double> =
+    override suspend fun geocodeZip(zip: String): ZipLocation =
         withContext(Dispatchers.IO) {
             val clean = zip.trim()
             require(clean.matches(Regex("\\d{5}"))) {
@@ -154,7 +162,14 @@ class WeatherRepositoryImpl(
             if (lat == null || lon == null) {
                 throw IOException("Could not read coordinates for ZIP $clean.")
             }
-            lat to lon
+            // "Oklahoma City, OK" — the header shows the place, never a
+            // bare ZIP. Falls back to the ZIP itself if Zippopotam ever
+            // omits the name.
+            val placeName = listOf(place.placeName, place.stateAbbreviation)
+                .filter { it.isNotBlank() }
+                .joinToString(", ")
+                .ifBlank { clean }
+            ZipLocation(lat = lat, lon = lon, placeName = placeName)
         }
 
     override suspend fun currentAndForecast(lat: Double, lon: Double): WeatherBundle =
@@ -176,6 +191,13 @@ class WeatherRepositoryImpl(
                 val alertsDeferred = async { alerts(lat, lon) }
                 val dailyPeriods = dailyDeferred.await().properties?.periods.orEmpty()
                 val hourlyPeriods = hourlyDeferred.await().properties?.periods.orEmpty()
+                // Alerts are isolated: a failed alerts fetch yields "couldn't
+                // check", never a dead screen — the forecast still renders.
+                val alertsResult = try {
+                    alertsDeferred.await()
+                } catch (e: Exception) {
+                    null
+                }
                 WeatherBundle(
                     current = currentFromHourly(hourlyPeriods),
                     hourly = hourlyPeriods
@@ -187,10 +209,12 @@ class WeatherRepositoryImpl(
                                 temperatureF = it.temperature!!,
                                 shortForecast = it.shortForecast ?: "",
                                 isDaytime = it.isDaytime,
+                                precipitationChancePct = it.probabilityOfPrecipitation?.value?.toInt(),
                             )
                         },
                     daily = dailyFromPeriods(dailyPeriods),
-                    alerts = alertsDeferred.await(),
+                    alerts = alertsResult.orEmpty(),
+                    alertsAvailable = alertsResult != null,
                 )
             }
         }
@@ -265,6 +289,7 @@ class WeatherRepositoryImpl(
             windDirection = first.windDirection,
             humidityPct = first.relativeHumidity?.value?.toInt(),
             iconUrl = first.icon,
+            precipitationChancePct = first.probabilityOfPrecipitation?.value?.toInt(),
         )
     }
 
@@ -280,6 +305,10 @@ class WeatherRepositoryImpl(
                 lowF = night?.temperature,
                 shortForecast = day?.shortForecast ?: night?.shortForecast ?: "",
                 iconUrl = day?.icon ?: night?.icon,
+                precipitationChancePct = listOfNotNull(
+                    day?.probabilityOfPrecipitation?.value?.toInt(),
+                    night?.probabilityOfPrecipitation?.value?.toInt(),
+                ).maxOrNull(),
             )
         }
     }

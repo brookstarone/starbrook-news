@@ -28,6 +28,7 @@ private const val EDITIONS_BASE = "news-editions/"
 private const val NEWS_USER_AGENT = "StarBrookNews/1.0 (Android)"
 private const val BREAKING_FRESH_MS = 6L * 60 * 60 * 1000 // web rule: 6 hours from detectedAt
 private const val LATEST_FRESH_MS = 2L * 60 * 60 * 1000 // web rule: 2 hours from builtAt
+private const val EDITION_STALE_MS = 18L * 60 * 60 * 1000 // an edition file older than this counts as "not built yet" for its slot (see isCurrentEdition)
 
 interface NewsRepository {
     fun editionsFlow(edition: String): Flow<List<Story>> // "morning" | "evening"
@@ -44,9 +45,19 @@ interface NewsRepository {
 
 // --- Wire DTOs (private; only the shapes the live files actually have) ---
 
-/** edition-morning/evening.json — verified: {"stories":[{...15 stories...}]} */
+/**
+ * edition-morning/evening.json — verified live 2026-11-19:
+ * {"stories":[{...15 stories...}], "sections":[...], "atAGlance":{...},
+ * "builtAt":"2026-11-19T13:00:09.781Z"}. Only "stories" and "builtAt" are
+ * read; the rest is ignored (ignoreUnknownKeys). "builtAt" drives the
+ * stale-edition fallback in refreshEdition: a file older than
+ * EDITION_STALE_MS is "not built yet" for its slot.
+ */
 @Serializable
-private data class EditionResponse(val stories: List<Story> = emptyList())
+private data class EditionResponse(
+    val stories: List<Story> = emptyList(),
+    val builtAt: String? = null,
+)
 
 /**
  * breaking.json — verified live as {"breaking":null,
@@ -242,12 +253,84 @@ class NewsRepositoryImpl(
         }
     }
 
+    /**
+     * DEFECT 1 fallback (2026-11-19): the requested edition is not always
+     * there to load. Before ~16:00 the evening file is still yesterday's
+     * (builtAt 2026-11-18T22:00:06Z when verified), and on a first-ever
+     * build day it can 404 outright. Never show an error screen when some
+     * edition exists: try the requested file, then the other edition, then
+     * latest.json. Whatever wins is cached under the REQUESTED edition key —
+     * the cache is "what Home shows for this switcher position", and the
+     * next refresh overwrites it when the real file lands. Only when all
+     * three sources fail does this throw (offline / empty cache → ErrorState
+     * + retry, which is the honest state then).
+     */
     private suspend fun refreshEdition(edition: String) {
-        val url = StarBrookApi.STORAGE_BASE + EDITIONS_BASE + "edition-$edition.json"
-        val stories = json.decodeFromString<EditionResponse>(getText(url)).stories
+        val stories = fetchEditionWithFallback(edition)
         val dao = db.cachedStoryDao()
         dao.clearEdition(edition)
         dao.insertAll(stories.map { it.copy(edition = edition) })
+    }
+
+    /** One edition file plus its build time (null when the file predates builtAt). */
+    private data class EditionFile(val stories: List<Story>, val builtAtMs: Long?)
+
+    private suspend fun fetchEditionFile(edition: String): EditionFile {
+        val url = StarBrookApi.STORAGE_BASE + EDITIONS_BASE + "edition-$edition.json"
+        val parsed = json.decodeFromString<EditionResponse>(getText(url))
+        return EditionFile(parsed.stories, parsed.builtAt?.let { parseInstantMsOrNull(it) })
+    }
+
+    /**
+     * "Current" = built within the last 18h. The pipeline builds at ~07:00
+     * and ~16:00, so the latest file of a slot is at most ~15h old
+     * (evening overnight); a superseded file is >= 24h old. 18h sits
+     * between the two, so a day-old evening file reads as "not built yet"
+     * while the overnight edition still counts as current. A file with no
+     * builtAt at all is accepted (older files predate the field).
+     */
+    private fun isCurrentEdition(builtAtMs: Long?): Boolean =
+        builtAtMs == null || System.currentTimeMillis() - builtAtMs <= EDITION_STALE_MS
+
+    private suspend fun fetchEditionWithFallback(edition: String): List<Story> {
+        val requested = runCatching { fetchEditionFile(edition) }.getOrNull()
+        if (requested != null && requested.stories.isNotEmpty() &&
+            isCurrentEdition(requested.builtAtMs)
+        ) {
+            return requested.stories
+        }
+        val other = if (edition == "morning") "evening" else "morning"
+        val fallback = runCatching { fetchEditionFile(other) }.getOrNull()
+        if (fallback != null && fallback.stories.isNotEmpty() &&
+            isCurrentEdition(fallback.builtAtMs)
+        ) {
+            return fallback.stories
+        }
+        // Last resort: latest.json — the freshest stories the backend has.
+        // No freshness gate here: as a fallback, slightly stale latest
+        // stories still beat an error screen.
+        val latest = runCatching { fetchLatestAsStories() }.getOrNull()
+        if (!latest.isNullOrEmpty()) return latest
+        throw IOException(
+            "Could not load the $edition edition. Check your connection and try again.",
+        )
+    }
+
+    /** latest.json (compact t/s/a/u keys) mapped onto Story for display. */
+    private suspend fun fetchLatestAsStories(): List<Story> {
+        val url = StarBrookApi.STORAGE_BASE + EDITIONS_BASE + "latest.json"
+        val parsed = json.decodeFromString<LatestResponse>(getText(url))
+        return parsed.stories.map { item ->
+            Story(
+                title = item.title,
+                source = item.source,
+                excerpt = null,
+                link = item.url,
+                published = item.published,
+                section = "national",
+                image = null,
+            )
+        }
     }
 
     /** Returns the live breaking story, or null when none qualifies. */
@@ -290,24 +373,33 @@ class NewsRepositoryImpl(
 
     /**
      * Daily morning/evening entries have no "file"/"poster" in the manifest.
-     * Web parity (news_mix.html videoUrl/videoPoster): the daily file is
-     * "news-briefing-<date>.mp4" and its poster "news-briefing-<date>.jpg"
-     * (both verified to exist for 2026-11-19 and 2026-11-18). Breaking
-     * flashes use their explicit manifest filenames. Morning and evening
-     * entries for the same date resolve to the same daily file — that is
-     * what the live web page does; if the pipeline later adds explicit
-     * "file" fields to daily entries, those win automatically.
+     * The two editions are SEPARATE bucket objects: morning is
+     * "news-briefing-<date>.mp4" (poster "news-briefing-<date>.jpg") and
+     * evening is "news-briefing-<date>-evening.mp4" (poster
+     * "news-briefing-<date>-evening.jpg") — both verified to exist live
+     * (morning 2026-11-19, evening 2026-11-18). The old mapping sent
+     * evening entries to the morning file, so tapping an evening briefing
+     * played the morning video. Breaking flashes use their explicit
+     * manifest filenames; if the pipeline later adds explicit "file"
+     * fields to daily entries, those win automatically.
      */
-    private fun ManifestVideo.toBriefingVideo(): BriefingVideo = BriefingVideo(
-        id = id,
-        date = date,
-        edition = edition,
-        isBreaking = isBreaking,
-        title = title,
-        duration = duration,
-        file = file ?: "news-briefing-$date.mp4",
-        posterUrl = StarBrookApi.posterUrl(poster ?: "news-briefing-$date.jpg"),
-    )
+    private fun ManifestVideo.toBriefingVideo(): BriefingVideo {
+        val baseName = if (edition == "evening") {
+            "news-briefing-$date-evening"
+        } else {
+            "news-briefing-$date"
+        }
+        return BriefingVideo(
+            id = id,
+            date = date,
+            edition = edition,
+            isBreaking = isBreaking,
+            title = title,
+            duration = duration,
+            file = file ?: "$baseName.mp4",
+            posterUrl = StarBrookApi.posterUrl(poster ?: "$baseName.jpg"),
+        )
+    }
 
     private fun parseInstantMsOrNull(value: String): Long? = try {
         java.time.Instant.parse(value).toEpochMilli()
