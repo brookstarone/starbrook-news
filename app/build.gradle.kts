@@ -4,6 +4,8 @@
 // reads keystore.properties ONLY when the file exists locally (never
 // committed); CI builds debug in v1 and never signs.
 
+import java.util.Properties
+
 apply(from = "$rootDir/gradle/font-download.gradle")
 
 plugins {
@@ -33,7 +35,7 @@ android {
         val keystorePropsFile = rootProject.file("keystore.properties")
         if (keystorePropsFile.exists()) {
             create("release") {
-                val props = java.util.Properties().apply {
+                val props = Properties().apply {
                     load(keystorePropsFile.inputStream())
                 }
                 storeFile = file(props.getProperty("storeFile"))
