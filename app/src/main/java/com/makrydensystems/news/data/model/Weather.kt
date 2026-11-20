@@ -1,12 +1,17 @@
 package com.makrydensystems.news.data.model
 
+import kotlinx.serialization.Serializable
+
 /**
- * Weather models — plain Kotlin data classes (built from NWS JSON by
- * WeatherRepository, not decoded directly, so no @Serializable here).
+ * Weather models — plain Kotlin data classes built from NWS JSON by
+ * WeatherRepository. The six cacheable models are also @Serializable so
+ * a fetched bundle can be stored as JSON in DataStore and re-emitted
+ * cache-first on the next open (see WeatherRepository.CachedWeather).
  * NWS (api.weather.gov) is the only forecast source.
  */
 
 // Current conditions, taken from the first hourly forecast period.
+@Serializable
 data class CurrentConditions(
     val temperatureF: Int,
     // NWS forecast/hourly periods carry no feels-like value; null until a
@@ -23,6 +28,7 @@ data class CurrentConditions(
     val precipitationChancePct: Int?,
 )
 
+@Serializable
 data class HourlyPeriod(
     val startTime: String, // ISO-8601 with offset, as returned by NWS
     val temperatureF: Int,
@@ -32,6 +38,7 @@ data class HourlyPeriod(
     val precipitationChancePct: Int?,
 )
 
+@Serializable
 data class DailyForecast(
     val date: String, // YYYY-MM-DD
     val highF: Int?,
@@ -43,6 +50,7 @@ data class DailyForecast(
     val precipitationChancePct: Int?,
 )
 
+@Serializable
 data class WeatherAlert(
     val headline: String,
     val severity: String,
@@ -51,6 +59,7 @@ data class WeatherAlert(
     val expires: String?, // ISO-8601, null when NWS omits it
 )
 
+@Serializable
 data class WeatherBundle(
     val current: CurrentConditions,
     val hourly: List<HourlyPeriod>, // next 24 hours
@@ -80,6 +89,7 @@ data class ZipLocation(
  * path-pattern tiles return 200). `time` is the frame's epoch seconds,
  * kept for display + animation order.
  */
+@Serializable
 data class RadarFrame(
     val time: Long,
     val path: String,

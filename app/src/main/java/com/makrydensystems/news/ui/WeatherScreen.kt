@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -69,6 +70,8 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.tan
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,6 +96,11 @@ private sealed interface WeatherState {
         val placeName: String,
         val lat: Double,
         val lon: Double,
+        // True while a fresh radar fetch is still running behind a
+        // cache-first render: RadarView shows a loading line instead of
+        // flashing its "isn't available" state. False once the fresh
+        // frames have arrived (even when that means zero frames).
+        val radarLoading: Boolean = false,
     ) : WeatherState
 }
 
@@ -114,20 +122,61 @@ private class WeatherViewModel(
             } else {
                 flow {
                     emit(WeatherState.Loading)
-                    val loc = repo.geocodeZip(zip)
-                    val bundle = repo.currentAndForecast(loc.lat, loc.lon)
-                    // Radar is isolated like alerts (see WeatherRepository
-                    // currentAndForecast): a failed RainViewer fetch must
-                    // not kill the screen — empty frames render the radar
-                    // section's honest unavailable state and the forecast
-                    // stays live.
-                    val frames = try {
-                        repo.radarFrames()
-                    } catch (e: Exception) {
-                        emptyList()
+                    // Cache-first (Fix 4): a bundle younger than 60 min
+                    // renders immediately, before any network call, so
+                    // the screen never sits on skeletons for ~5s again.
+                    // Radar frames go stale fast (RainViewer paths 410),
+                    // so cached frames are reused only under 30 min —
+                    // older than that, the cached render shows the radar
+                    // loading line while the fresh frames load below.
+                    val cached = repo.cachedWeather(zip)
+                    val cacheAgeMs = cached?.let {
+                        System.currentTimeMillis() - it.fetchedAtMs
+                    } ?: Long.MAX_VALUE
+                    if (cached != null && cacheAgeMs < 60L * 60 * 1000) {
+                        val radarFresh = cacheAgeMs < 30L * 60 * 1000
+                        emit(
+                            WeatherState.Ready(
+                                bundle = cached.bundle,
+                                radarFrames = if (radarFresh) cached.radarFrames else emptyList(),
+                                videoExists = cached.videoExists,
+                                zip = cached.zip,
+                                placeName = cached.placeName,
+                                lat = cached.lat,
+                                lon = cached.lon,
+                                radarLoading = !radarFresh,
+                            ),
+                        )
                     }
+                    // Fresh load: geocode first (lat/lon needed), then
+                    // the three independent calls run in parallel.
+                    val loc = repo.geocodeZip(zip)
                     val today = LocalDate.now(ZoneId.of("America/Chicago")).toString()
-                    val videoExists = repo.weatherVideoExists(zip, today, "midday")
+                    val (bundle, frames, videoExists) = coroutineScope {
+                        val bundleDeferred = async {
+                            repo.currentAndForecast(loc.lat, loc.lon)
+                        }
+                        // Radar is isolated like alerts (see
+                        // WeatherRepository currentAndForecast): a failed
+                        // RainViewer fetch must not kill the screen —
+                        // empty frames render the radar section's honest
+                        // unavailable state and the forecast stays live.
+                        val framesDeferred = async {
+                            try {
+                                repo.radarFrames()
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        }
+                        val videoDeferred = async {
+                            repo.weatherVideoExists(zip, today, "midday")
+                        }
+                        Triple(
+                            bundleDeferred.await(),
+                            framesDeferred.await(),
+                            videoDeferred.await(),
+                        )
+                    }
                     emit(
                         WeatherState.Ready(
                             bundle = bundle,
@@ -137,7 +186,17 @@ private class WeatherViewModel(
                             placeName = loc.placeName,
                             lat = loc.lat,
                             lon = loc.lon,
+                            radarLoading = false,
                         ),
+                    )
+                    repo.storeWeather(
+                        zip = zip,
+                        placeName = loc.placeName,
+                        lat = loc.lat,
+                        lon = loc.lon,
+                        bundle = bundle,
+                        frames = frames,
+                        videoExists = videoExists,
                     )
                     // Live alert re-checks (weather-alerts toggle, Wave 2):
                     // alertsFlow does one check immediately, then polls NWS
@@ -158,6 +217,7 @@ private class WeatherViewModel(
                                 placeName = loc.placeName,
                                 lat = loc.lat,
                                 lon = loc.lon,
+                                radarLoading = false,
                             ),
                         )
                     }
@@ -388,6 +448,7 @@ fun WeatherScreen(
                         text = "Weather for ${s.placeName}",
                         style = StarBrookType.title,
                         color = StarBrookColors.textPrimary,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                     OutlinedButton(
                         onClick = { vm.clearZip() },
@@ -396,9 +457,10 @@ fun WeatherScreen(
                             contentColor = StarBrookColors.gold,
                         ),
                         border = BorderStroke(1.dp, StarBrookColors.gold),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) {
-                        Text(text = "Change ZIP", style = StarBrookType.label)
+                        Text(text = "Change ZIP", style = StarBrookType.label, maxLines = 1)
                     }
                 }
                 // Current conditions hero card (mirrors the web weather
@@ -636,6 +698,7 @@ fun WeatherScreen(
                     frames = s.radarFrames,
                     lat = s.lat,
                     lon = s.lon,
+                    radarLoading = s.radarLoading,
                 )
                 Spacer(modifier = Modifier.height(24.dp))
             }
@@ -649,7 +712,18 @@ private fun RadarView(
     frames: List<RadarFrame>,
     lat: Double,
     lon: Double,
+    radarLoading: Boolean = false,
 ) {
+    if (radarLoading) {
+        // Cache-first render while the fresh radar is still loading:
+        // a loading line, not the "isn't available" state.
+        Text(
+            text = "Loading radar…",
+            style = StarBrookType.bodySmall,
+            color = StarBrookColors.textSecondary,
+        )
+        return
+    }
     if (frames.isEmpty()) {
         EmptyState(
             title = "Radar isn't available right now",

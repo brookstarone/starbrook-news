@@ -54,6 +54,21 @@ interface WeatherRepository {
     suspend fun radarFrames(): List<RadarFrame>
     fun radarTileUrl(frame: RadarFrame, z: Int, x: Int, y: Int): String
     suspend fun weatherVideoExists(zip: String, date: String, slot: String): Boolean
+    // Weather cache (Fix 4): the last fetched bundle for a ZIP, stored
+    // as JSON in DataStore so the screen can render cache-first.
+    // cachedWeather returns null when nothing is stored, the stored JSON
+    // is corrupt, or it was stored for a different ZIP. storeWeather is
+    // a no-op when this repository was built without a SettingsStore.
+    suspend fun cachedWeather(zip: String): CachedWeather?
+    suspend fun storeWeather(
+        zip: String,
+        placeName: String,
+        lat: Double,
+        lon: Double,
+        bundle: WeatherBundle,
+        frames: List<RadarFrame>,
+        videoExists: Boolean,
+    )
 }
 
 // --- Wire DTOs (private; nullable everywhere — NWS omits fields freely) ---
@@ -145,6 +160,28 @@ private data class RainViewerRadar(val past: List<RainViewerFrame> = emptyList()
 private data class RainViewerFrame(
     val time: Long = 0L,
     val path: String = "",
+)
+
+/**
+ * One cached weather load for a ZIP: the forecast bundle, the radar
+ * frames, and whether the midday video existed, plus when it was
+ * fetched (epoch ms). Stored as a single JSON blob in DataStore.
+ *
+ * Public, not private/internal: the public WeatherRepository interface
+ * exposes it as a return type, and a less-visible type in a public
+ * signature is a compile error — it lives in the data package (not
+ * model) so it stays a repository-layer detail.
+ */
+@Serializable
+data class CachedWeather(
+    val zip: String,
+    val placeName: String,
+    val lat: Double,
+    val lon: Double,
+    val bundle: WeatherBundle,
+    val radarFrames: List<RadarFrame>,
+    val videoExists: Boolean,
+    val fetchedAtMs: Long,
 )
 
 class WeatherRepositoryImpl(
@@ -332,6 +369,44 @@ class WeatherRepositoryImpl(
                 false
             }
         }
+
+    override suspend fun cachedWeather(zip: String): CachedWeather? {
+        val store = settings ?: return null
+        val raw = store.cachedWeatherJson() ?: return null
+        // Corrupt JSON (or a shape from an older build) degrades to
+        // "no cache" — never a crash, never a stale wrong-ZIP render.
+        return runCatching { json.decodeFromString<CachedWeather>(raw) }
+            .getOrNull()
+            ?.takeIf { it.zip == zip }
+    }
+
+    override suspend fun storeWeather(
+        zip: String,
+        placeName: String,
+        lat: Double,
+        lon: Double,
+        bundle: WeatherBundle,
+        frames: List<RadarFrame>,
+        videoExists: Boolean,
+    ) {
+        val store = settings ?: return
+        val cached = CachedWeather(
+            zip = zip,
+            placeName = placeName,
+            lat = lat,
+            lon = lon,
+            bundle = bundle,
+            radarFrames = frames,
+            videoExists = videoExists,
+            fetchedAtMs = System.currentTimeMillis(),
+        )
+        // Explicit-serializer member form, matching NewsRepository's
+        // encodeToString usage — no extra import needed.
+        val encoded = runCatching {
+            json.encodeToString(CachedWeather.serializer(), cached)
+        }.getOrNull() ?: return
+        store.saveWeatherCache(encoded)
+    }
 
     // --- Helpers ---
 

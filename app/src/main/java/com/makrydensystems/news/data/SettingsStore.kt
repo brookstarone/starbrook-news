@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 
@@ -170,6 +171,17 @@ class SettingsStore(context: Context) {
         }
     }
 
+    // Weather cache (Fix 4): the last fetched WeatherBundle + radar
+    // frames + video flag, as one JSON blob, so the Weather screen can
+    // render instantly on the next open while the network refreshes.
+    suspend fun saveWeatherCache(json: String) {
+        dataStore.edit { it[Keys.WEATHER_CACHE] = json }
+    }
+
+    suspend fun cachedWeatherJson(): String? {
+        return prefsFlow.first()[Keys.WEATHER_CACHE]
+    }
+
     suspend fun setNotifyBreaking(enabled: Boolean) {
         dataStore.edit { it[Keys.NOTIFY_BREAKING] = enabled }
     }
@@ -206,6 +218,7 @@ class SettingsStore(context: Context) {
         val SESSION_REMEMBER = booleanPreferencesKey("portal_session_remember")
         val PORTAL_HINT_SEEN = booleanPreferencesKey("portal_hint_seen")
         val DEVICE_ID = stringPreferencesKey("portal_device_id")
+        val WEATHER_CACHE = stringPreferencesKey("weather_cache_json")
     }
 
     companion object {
