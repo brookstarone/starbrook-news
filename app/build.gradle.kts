@@ -11,6 +11,7 @@
 import java.util.Properties
 
 apply(from = "$rootDir/gradle/font-download.gradle")
+apply(from = "$rootDir/gradle/launcher-icon-download.gradle")
 
 plugins {
     id("com.android.application")
@@ -121,7 +122,7 @@ android {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn("downloadStarBrookFonts")
+    dependsOn("downloadStarBrookFonts", "downloadLauncherIcon")
 }
 
 dependencies {

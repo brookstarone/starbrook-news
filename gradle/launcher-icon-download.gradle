@@ -1,0 +1,74 @@
+// StarBrook News — build-time launcher-icon download.
+//
+// The SBN emblem is a raster render (the approved #4 AI image, extracted
+// to transparency as sbn-emblem-v3.png) — it can NEVER be committed to git
+// (the GitHub connector is UTF-8 only and cannot push binaries), and it
+// cannot be a vector drawable. Same rule as the fonts (see
+// gradle/font-download.gradle): this task downloads the exact pinned
+// 432x432 adaptive-icon foreground PNG on a fresh checkout, verifies its
+// SHA-256, and places it in app/src/main/res/drawable/ — so CI and a
+// clean clone build identically to a machine that already has it.
+//
+// Pinned source (verified 2026-11-19):
+//   https://bamrgsjgvakyucyqtwlg.supabase.co/storage/v1/object/public/news-videos/app-icon/ic_launcher_foreground_sbn.png
+//   sha256 69913c6034cce1a5e6d66e9a5ec705798ae7e7ea437e50dbfa4ec55b45512f21
+//   Rendered from ~/workspace/sbn-logos/sbn-emblem-v3.png (1600x1600
+//   transparent): the emblem scaled to 288x288 (72dp) centred on a
+//   432x432 transparent canvas, so the star + SBN sit inside the
+//   adaptive-icon safe zone (66dp circle) and the navy background
+//   drawable shows through around it. The adaptive-icon XMLs point at
+//   @drawable/ic_launcher_foreground_sbn; the old vector
+//   ic_launcher_foreground.xml stays in the repo, orphaned — it cannot
+//   be deleted through the GitHub connector (no deletions), and an
+//   unused drawable is harmless.
+//
+// Wiring (in app/build.gradle.kts, next to the font task):
+//     apply(from = "$rootDir/gradle/launcher-icon-download.gradle")
+//     tasks.named("preBuild").configure {
+//         dependsOn("downloadStarBrookFonts", "downloadLauncherIcon")
+//     }
+// The task is incremental: an icon already present with a matching
+// hash is left alone, so normal builds never touch the network.
+
+import java.security.MessageDigest
+
+def iconFile = file("$projectDir/src/main/res/drawable/ic_launcher_foreground_sbn.png")
+def iconUrl = "https://bamrgsjgvakyucyqtwlg.supabase.co/storage/v1/object/public/news-videos/app-icon/ic_launcher_foreground_sbn.png"
+def iconSha256 = "69913c6034cce1a5e6d66e9a5ec705798ae7e7ea437e50dbfa4ec55b45512f21"
+
+def sha256File(File f) {
+    def digest = MessageDigest.getInstance("SHA-256")
+    f.withInputStream { stream ->
+        byte[] buffer = new byte[8192]
+        int read
+        while ((read = stream.read(buffer)) != -1) {
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().encodeHex().toString()
+}
+
+tasks.register("downloadLauncherIcon") {
+    group = "starbrook"
+    description = "Downloads the pinned SBN launcher-icon foreground PNG into res/drawable (SHA-256 verified)."
+    outputs.file(iconFile)
+
+    doLast {
+        if (iconFile.exists() && sha256File(iconFile) == iconSha256) {
+            logger.lifecycle("StarBrook launcher icon: present and verified.")
+            return
+        }
+        logger.lifecycle("StarBrook launcher icon: downloading …")
+        iconFile.parentFile.mkdirs()
+        new URL(iconUrl).withInputStream { input ->
+            iconFile.withOutputStream { output -> output << input }
+        }
+        def actual = sha256File(iconFile)
+        if (actual != iconSha256) {
+            throw new GradleException(
+                "Launcher icon SHA-256 mismatch: expected $iconSha256, got $actual ($iconFile). " +
+                "Delete the file and re-run :app:downloadLauncherIcon.")
+        }
+        logger.lifecycle("StarBrook launcher icon: downloaded and verified.")
+    }
+}
