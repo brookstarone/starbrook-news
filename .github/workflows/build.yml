@@ -18,6 +18,14 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # setup-android v3 defaults `packages` to `tools platform-tools`,
+          # but Google no longer serves the legacy `tools` package, so
+          # `sdkmanager tools` fails with "Failed to find package 'tools'"
+          # and kills the step. Install platform-tools only; build-tools
+          # 34.0.0 and platform android-34 come preinstalled on the
+          # ubuntu-24.04 runner image.
+          packages: 'platform-tools'
 
       # No Gradle wrapper in the repo: the wrapper jar is a binary and
       # the GitHub push flow is UTF-8 only, so CI uses the pinned
