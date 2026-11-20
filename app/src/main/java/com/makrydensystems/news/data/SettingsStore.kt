@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
@@ -41,8 +42,15 @@ class SettingsStore(context: Context) {
     val sectionsFlow: Flow<Set<String>> =
         prefsFlow.map { it[Keys.SECTIONS] ?: ALL_SECTIONS }
 
+    // distinctUntilChanged is load-bearing (tap-test #5): prefsFlow is
+    // the raw DataStore flow and re-emits on EVERY write — including the
+    // weather-cache write the Weather load itself performs after every
+    // fetch. Without it, the same ZIP value re-emitted, combine
+    // re-emitted, and flatMapLatest restarted the whole load, which
+    // wrote the cache again — a self-triggering reload loop that snapped
+    // the Weather screen back to the top every ~2s.
     val zipFlow: Flow<String?> =
-        prefsFlow.map { it[Keys.ZIP] }
+        prefsFlow.map { it[Keys.ZIP] }.distinctUntilChanged()
 
     val notifyBreakingFlow: Flow<Boolean> =
         prefsFlow.map { it[Keys.NOTIFY_BREAKING] ?: true }

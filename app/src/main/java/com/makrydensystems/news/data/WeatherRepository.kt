@@ -405,6 +405,21 @@ class WeatherRepositoryImpl(
         val encoded = runCatching {
             json.encodeToString(CachedWeather.serializer(), cached)
         }.getOrNull() ?: return
+        // Belt-and-braces against write churn (tap-test #5): a DataStore
+        // write re-emits every prefs flow, and this load writes its cache
+        // after every fetch — so an unchanged payload must not touch the
+        // store at all. A literal byte comparison can never fire here
+        // because fetchedAtMs is stamped fresh on every encode, so the
+        // stored blob is decoded and compared with the timestamp set
+        // aside: same ZIP, place, coords, bundle, radar frames and video
+        // flag means nothing changed since the last store — skip the
+        // write entirely.
+        val existing = runCatching {
+            store.cachedWeatherJson()?.let { json.decodeFromString<CachedWeather>(it) }
+        }.getOrNull()
+        if (existing != null && existing.copy(fetchedAtMs = cached.fetchedAtMs) == cached) {
+            return
+        }
         store.saveWeatherCache(encoded)
     }
 

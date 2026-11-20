@@ -31,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +82,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -115,13 +117,29 @@ private class WeatherViewModel(
     // the user back at the prompt to retype it.)
     private val retryTick = MutableStateFlow(0)
 
+    // Backstop (tap-test #5): the last Ready this load emitted, for the
+    // ZIP it belongs to — recorded by the onEach before stateIn, so it is
+    // always the Ready actually on screen. A reload of the SAME ZIP never
+    // shows the Loading skeleton over it — the skeleton's short content
+    // clamps the scroll offset to 0 and the screen snaps back to the top.
+    // A genuinely different ZIP still loads with the skeleton, because
+    // the old Ready belongs to another place.
+    private val lastReady = MutableStateFlow<WeatherState.Ready?>(null)
+
     val state: kotlinx.coroutines.flow.StateFlow<WeatherState> =
         combine(settings.zipFlow, retryTick) { zip, _ -> zip }.flatMapLatest { zip ->
             if (zip.isNullOrBlank()) {
                 flowOf<WeatherState>(WeatherState.NeedZip)
             } else {
                 flow {
-                    emit(WeatherState.Loading)
+                    // Never emit Loading over a Ready for this ZIP: the
+                    // reload keeps rendering the last Ready while the
+                    // fresh load runs, so the scroll position survives.
+                    // A different ZIP (or no Ready yet) still loads with
+                    // the skeleton — the old content is for another place.
+                    if (lastReady.value?.zip != zip) {
+                        emit(WeatherState.Loading)
+                    }
                     // Cache-first (Fix 4): a bundle younger than 60 min
                     // renders immediately, before any network call, so
                     // the screen never sits on skeletons for ~5s again.
@@ -229,7 +247,12 @@ private class WeatherViewModel(
                     )
                 }
             }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeatherState.Loading)
+        }
+            // Record the last Ready (see lastReady): onEach runs before
+            // the value reaches stateIn, so by the time any later reload
+            // starts, the guard above sees the Ready that is on screen.
+            .onEach { if (it is WeatherState.Ready) lastReady.value = it }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeatherState.Loading)
 
     fun setZip(zip: String) {
         viewModelScope.launch { settings.setZip(zip) }
@@ -732,12 +755,24 @@ private fun RadarView(
         return
     }
     val loopFrames = remember(frames) { frames.takeLast(6) }
-    var frameIndex by remember(loopFrames) { mutableStateOf(loopFrames.lastIndex) }
+    // The loop index is NOT keyed on loopFrames (tap-test #5): every
+    // fresh load hands this a new list instance, and keying remember on
+    // it reset the index to lastIndex — the timestamp chip jumped
+    // backwards on every refresh. The index now survives frame refreshes;
+    // a size change only clamps it into range, never restarts the loop.
+    var frameIndex by remember { mutableStateOf(loopFrames.lastIndex) }
     var playing by remember { mutableStateOf(false) }
-    LaunchedEffect(playing, loopFrames) {
+    // Latest frames for the play coroutine, without restarting it: the
+    // loop effect below is keyed on `playing` only, so it reads the
+    // current list through this holder instead of a stale capture.
+    val currentFrames by rememberUpdatedState(loopFrames)
+    LaunchedEffect(loopFrames.size) {
+        frameIndex = frameIndex.coerceIn(0, (loopFrames.size - 1).coerceAtLeast(0))
+    }
+    LaunchedEffect(playing) {
         while (playing) {
             delay(700)
-            frameIndex = (frameIndex + 1) % loopFrames.size
+            frameIndex = (frameIndex + 1) % currentFrames.size.coerceAtLeast(1)
         }
     }
     // Zoom 7 is the closest RainViewer serves: zoom 8+ returns its
@@ -747,7 +782,9 @@ private fun RadarView(
     val zoom = 7
     val context = LocalContext.current
     val (cx, cy) = tileXY(lat, lon, zoom)
-    val frame = loopFrames[frameIndex]
+    // Defensive clamp at the use site: the index is only ever clamped on
+    // a size change, so a shrink between ticks can never index out of range.
+    val frame = loopFrames[frameIndex.coerceIn(loopFrames.indices)]
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(
             modifier = Modifier
