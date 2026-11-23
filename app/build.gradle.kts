@@ -21,6 +21,11 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
     // Compose compiler (Kotlin Compose plugin 2.0.21 = Kotlin 2.0.21).
     id("org.jetbrains.kotlin.plugin.compose")
+    // Firebase (FCM push, Build #24): reads app/google-services.json
+    // (project starbrook-news, both packages) at build time. The plugin
+    // MUST be applied — without it FirebaseApp has no values to init
+    // from and getInstance() throws at runtime.
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -160,6 +165,15 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     kapt("androidx.room:room-compiler:2.6.1")
+    // Firebase Cloud Messaging (Build #24): push notifications from the
+    // app itself. BoM 35.2.0 = latest per the Firebase Android release
+    // notes, 2026-11-11 (firebase-messaging 26.0.2). The BoM pins the
+    // messaging version — never declare firebase-messaging with a
+    // version of its own. google-services.json (project starbrook-news)
+    // is in app/ and covers both packages; the google-services plugin
+    // above reads it. No Firebase Analytics — not used, not wanted.
+    implementation(platform("com.google.firebase:firebase-bom:35.2.0"))
+    implementation("com.google.firebase:firebase-messaging")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

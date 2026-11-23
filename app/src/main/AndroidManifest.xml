@@ -3,6 +3,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- FCM push (Build #24): Android 13+ needs this at runtime — the
+         Settings toggles request it when first turned on. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -14,12 +17,33 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- FCM push (Build #24): receives data-only messages and builds
+             the notification itself (StarBrookMessagingService). The
+             MESSAGING_EVENT intent-filter is what FCM uses to deliver.
+             Not exported: only Firebase + the app talk to it. -->
+        <service
+            android:name=".data.push.StarBrookMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <!-- Fallbacks if a message ever arrives without a channel id in
+             its data (the server always sets one — see _shared/fcm.ts). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="starbrook_breaking" />
     </application>
 
 </manifest>

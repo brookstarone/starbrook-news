@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "857179222978",
+    "project_id": "starbrook-news",
+    "storage_bucket": "starbrook-news.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:857179222978:android:2b9eee23f32464d92c9c5b",
+        "android_client_info": {
+          "package_name": "com.makrydensystems.news"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAQehuzUbqm3KZnNFAkHEKSREOoWoDGAFs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:857179222978:android:8058fb007cf5b3092c9c5b",
+        "android_client_info": {
+          "package_name": "com.makrydensystems.news.debug"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAQehuzUbqm3KZnNFAkHEKSREOoWoDGAFs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

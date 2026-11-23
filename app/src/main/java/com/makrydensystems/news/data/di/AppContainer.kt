@@ -11,6 +11,7 @@ import com.makrydensystems.news.data.StarBrookApi
 import com.makrydensystems.news.data.WeatherRepository
 import com.makrydensystems.news.data.WeatherRepositoryImpl
 import com.makrydensystems.news.data.local.AppDatabase
+import com.makrydensystems.news.data.push.FcmRegistrar
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -54,6 +55,11 @@ class AppContainer(context: Context) {
     val settingsStore: SettingsStore = SettingsStore(appContext)
 
     val portalAuth: PortalAuth = PortalAuth(okHttpClient, settingsStore)
+
+    // FCM push (Build #24): registers this device's token with the
+    // server so breaking + editions + weather alerts arrive as real
+    // push notifications. Shares the app's OkHttpClient + SettingsStore.
+    val fcmRegistrar: FcmRegistrar = FcmRegistrar(okHttpClient, settingsStore)
 
     val portalRepository: PortalRepository =
         PortalRepository(okHttpClient, portalAuth, settingsStore, database)

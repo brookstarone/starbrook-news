@@ -1,5 +1,10 @@
 package com.makrydensystems.news.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,11 +28,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -123,9 +131,10 @@ private fun ToggleRow(
  * section toggles above keep using ToggleRow). A REAL control: the whole
  * row is a switch (Role.Switch) with a 48dp minimum touch target, so
  * tapping anywhere on the row flips it, and the description says exactly
- * what it does. In-app only: it gates live refresh while the app is
- * open — it does not send push notifications while the app is closed
- * (no FCM yet; see PushModule).
+ * what it does. The toggle does two things: it gates the in-app live
+ * refresh while the app is open (PushModule), AND it re-registers this
+ * device's FCM token with the server (FcmRegistrar), so the kind stops
+ * arriving as a push when the toggle is off.
  */
 @Composable
 private fun NotificationToggleRow(
@@ -195,6 +204,32 @@ fun SettingsScreen(
     var zipInput by remember(zip) { mutableStateOf(zip.orEmpty()) }
     var zipError by remember { mutableStateOf<String?>(null) }
 
+    // FCM push (Build #24): a toggle change re-registers this device
+    // with the server (new kinds), and a ZIP change re-registers with
+    // the new ZIP — the server row is upserted, so no re-subscribe is
+    // needed. Android 13+ asks for notification permission the first
+    // time a toggle is turned on; registration proceeds either way
+    // (the OS blocks display without the permission, the token still
+    // registers).
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* granted or denied — nothing to do here */ }
+    fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    fun refreshPushRegistration() {
+        scope.launch { container.fcmRegistrar.ensureRegistered() }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -259,6 +294,7 @@ fun SettingsScreen(
                     if (zipInput.length == 5) {
                         zipError = null
                         vm.setZip(zipInput)
+                        refreshPushRegistration()
                     } else {
                         zipError = "That doesn't look like a ZIP code — 5 digits."
                     }
@@ -267,33 +303,49 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
         SectionHeader(title = "Notifications")
         Text(
-            text = "In-app only — these refresh content while the app is open. They do not send push notifications while the app is closed; that needs Firebase, which isn't set up yet.",
+            text = "Push notifications from the app itself — breaking news, editions, and weather alerts arrive even when the app is closed. Turning a toggle off stops that kind. (Android 13 and up asks for notification permission the first time you turn one on.)",
             style = StarBrookType.bodySmall,
             color = StarBrookColors.textSecondary,
         )
         NotificationToggleRow(
             label = "Breaking news",
-            description = "Checks for breaking news every 5 minutes while the app is open. New breaking shows in the strip on News.",
+            description = "Breaking news as it happens, even when the app is closed. Tapping it opens the story.",
             checked = notifyBreaking,
-            onChange = { vm.setNotifyBreaking(it) },
+            onChange = {
+                vm.setNotifyBreaking(it)
+                if (it) requestNotificationPermissionIfNeeded()
+                refreshPushRegistration()
+            },
         )
         NotificationToggleRow(
             label = "Morning edition",
-            description = "Re-checks the morning edition every 15 minutes while the app is open, so it lands after its 7:00 AM build without reopening the app.",
+            description = "The morning edition, when it is ready after its 7:00 AM build. Tapping it opens News.",
             checked = notifyMorning,
-            onChange = { vm.setNotifyMorning(it) },
+            onChange = {
+                vm.setNotifyMorning(it)
+                if (it) requestNotificationPermissionIfNeeded()
+                refreshPushRegistration()
+            },
         )
         NotificationToggleRow(
             label = "Evening edition",
-            description = "Re-checks the evening edition every 15 minutes while the app is open, so it lands after its 4:00 PM build without reopening the app.",
+            description = "The evening edition, when it is ready after its 4:00 PM build. Tapping it opens News.",
             checked = notifyEvening,
-            onChange = { vm.setNotifyEvening(it) },
+            onChange = {
+                vm.setNotifyEvening(it)
+                if (it) requestNotificationPermissionIfNeeded()
+                refreshPushRegistration()
+            },
         )
         NotificationToggleRow(
             label = "Weather alerts",
-            description = "Re-checks National Weather Service alerts every 10 minutes while the Weather screen is open.",
+            description = "Severe weather warnings and rain starting soon, for your ZIP code. Tapping it opens Weather.",
             checked = notifyWeather,
-            onChange = { vm.setNotifyWeather(it) },
+            onChange = {
+                vm.setNotifyWeather(it)
+                if (it) requestNotificationPermissionIfNeeded()
+                refreshPushRegistration()
+            },
         )
         Spacer(modifier = Modifier.height(24.dp))
     }

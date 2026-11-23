@@ -33,14 +33,14 @@ import kotlinx.coroutines.flow.asStateFlow
  * lands — they start at the same defaults as SettingsStore, so a fresh
  * install behaves identically either way.
  *
- * FCM (NOT built — needs Matthew's word): when the Firebase project
- * exists, this object gains the token-registration + topic-subscription
- * calls and the app gains the Firebase Messaging dependency. Topics map
- * 1:1 to the toggles: "breaking", "morning", "evening",
- * "weather-alerts". The project itself is still an open item — WHICH
- * Google account — do NOT create it. Until then there are no Firebase
- * imports anywhere in the app and the build must succeed with no
- * google-services.json present.
+ * FCM (BUILT — Build #24): the Firebase project "StarBrook News"
+ * (starbrook-news) exists, the app has the Firebase Messaging
+ * dependency + google-services.json, and the token lives server-side
+ * in news_fcm_tokens via the news-fcm-subscribe function
+ * (data/push/FcmRegistrar.kt). Sends are PER-TOKEN, not topics:
+ * weather alerts are per-ZIP and topics cannot do per-ZIP, so the
+ * server filters on the token row's `kinds` (1:1 with these
+ * toggles) instead. The TOPIC_* constants below are unused.
  */
 object PushModule {
 

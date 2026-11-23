@@ -1,5 +1,6 @@
 package com.makrydensystems.news
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,12 +11,14 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.NavType
@@ -26,6 +29,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.makrydensystems.news.data.StarBrookApi
 import com.makrydensystems.news.data.di.AppContainer
+import com.makrydensystems.news.data.push.NotificationChannels
+import com.makrydensystems.news.data.push.StarBrookMessagingService
 import com.makrydensystems.news.ui.HomeScreen
 import com.makrydensystems.news.ui.ReadScreen
 import com.makrydensystems.news.ui.SavedScreen
@@ -40,17 +45,30 @@ import com.makrydensystems.news.ui.components.StarBrookBottomNav
 import com.makrydensystems.news.ui.components.StarBrookRoutes
 import com.makrydensystems.news.ui.components.StarBrookTopBar
 import com.makrydensystems.news.ui.theme.StarBrookTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    // Pending notification-tap route (StarBrookMessagingService puts
+    // the route in EXTRA_ROUTE). A StateFlow so onNewIntent — a tap
+    // while the app is already open (singleTop) — reaches the
+    // composable the same way a cold-start intent does.
+    private val deepLinkRoute = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        deepLinkRoute.value = intent?.getStringExtra(StarBrookMessagingService.EXTRA_ROUTE)
         setContent {
             StarBrookTheme {
                 val container = remember { AppContainer(applicationContext) }
-                StarBrookApp(container)
+                StarBrookApp(container, deepLinkRoute)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        deepLinkRoute.value = intent?.getStringExtra(StarBrookMessagingService.EXTRA_ROUTE)
     }
 }
 
@@ -89,8 +107,26 @@ private fun titleFor(route: String?): String = when {
 }
 
 @Composable
-private fun StarBrookApp(container: AppContainer) {
+private fun StarBrookApp(container: AppContainer, deepLinkRoute: MutableStateFlow<String?>) {
     val navController = rememberNavController()
+    // FCM push (Build #24): notification channels exist from the first
+    // cold start, and this device's token is registered with the server
+    // (or unregistered when every toggle is off). Both are best-effort
+    // — a failure never blocks the UI, and the next cold start retries.
+    val appContext = LocalContext.current.applicationContext
+    LaunchedEffect(Unit) {
+        NotificationChannels.createChannels(appContext)
+        container.fcmRegistrar.ensureRegistered()
+    }
+    // Notification tap: navigate to the pushed route once, then clear
+    // it so a recomposition does not re-navigate. The route was already
+    // validated by StarBrookMessagingService (validRoute).
+    val pendingRoute by deepLinkRoute.collectAsState()
+    LaunchedEffect(pendingRoute) {
+        val route = pendingRoute ?: return@LaunchedEffect
+        deepLinkRoute.value = null
+        navController.navigate(route) { launchSingleTop = true }
+    }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     // The Hub is a top-level route: the masthead keeps the Live Star as

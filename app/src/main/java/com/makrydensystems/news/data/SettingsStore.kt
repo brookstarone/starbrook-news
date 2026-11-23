@@ -112,6 +112,13 @@ class SettingsStore(context: Context) {
         prefs[Keys.DEVICE_ID] ?: ""
     }
 
+    // Last FCM token registered with the server (Build #24). Kept so
+    // an unregister can target exactly the token the server has, and
+    // so a re-register can tell whether the token changed. The token
+    // itself is only ever sent to Supabase, never logged.
+    val fcmTokenFlow: Flow<String?> =
+        prefsFlow.map { it[Keys.FCM_TOKEN] }.distinctUntilChanged()
+
     suspend fun setNewsSubscribed(enabled: Boolean) {
         dataStore.edit { it[Keys.NEWS_SUBSCRIBED] = enabled }
     }
@@ -206,6 +213,14 @@ class SettingsStore(context: Context) {
         dataStore.edit { it[Keys.NOTIFY_WEATHER] = enabled }
     }
 
+    suspend fun setFcmToken(token: String) {
+        dataStore.edit { it[Keys.FCM_TOKEN] = token }
+    }
+
+    suspend fun clearFcmToken() {
+        dataStore.edit { prefs -> prefs.remove(Keys.FCM_TOKEN) }
+    }
+
     private object Keys {
         val EDITION = stringPreferencesKey("edition")
         val SECTIONS = stringSetPreferencesKey("sections")
@@ -227,6 +242,7 @@ class SettingsStore(context: Context) {
         val PORTAL_HINT_SEEN = booleanPreferencesKey("portal_hint_seen")
         val DEVICE_ID = stringPreferencesKey("portal_device_id")
         val WEATHER_CACHE = stringPreferencesKey("weather_cache_json")
+        val FCM_TOKEN = stringPreferencesKey("fcm_token")
     }
 
     companion object {
