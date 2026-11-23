@@ -369,16 +369,52 @@ class NewsRepositoryImpl(
 
     override fun videosFlow(): Flow<List<BriefingVideo>> = flow {
         val cached = db.videoDao().getAll()
+        var lastEmitted = cached
         if (cached.isNotEmpty()) emit(cached)
         try {
             refreshVideos()
-            emit(db.videoDao().getAll())
+            val fresh = db.videoDao().getAll()
+            lastEmitted = fresh
+            emit(fresh)
         } catch (e: Exception) {
             if (cached.isEmpty()) {
                 throw IOException(
                     "Could not load videos. Check your connection and try again.",
                     e,
                 )
+            }
+        }
+        // Breaking poll (2026-11-23, Nvidia flash gap): the manifest is
+        // where breaking flashes land, but this flow used to fetch it
+        // exactly once — a flash posted while Home sat open never
+        // appeared until a manual pull-to-refresh, and the 5-min
+        // breaking.json poll never touched the videos list. So while the
+        // Breaking toggle is ON, re-fetch the manifest every
+        // BREAKING_POLL_MS for as long as the flow is collected (Home
+        // open) — a new flash surfaces within one poll, no reopen
+        // needed. OFF suspends on the gate (zero network) until it
+        // comes back ON, mirroring breakingFlow. Emits only when the
+        // list actually changed, so the screen never flickers.
+        val enabled = settings?.notifyBreakingFlow ?: PushModule.breakingEnabled
+        while (currentCoroutineContext().isActive) {
+            if (!enabled.first()) {
+                enabled.first { it }
+                continue
+            }
+            delay(BREAKING_POLL_MS)
+            if (!enabled.first()) continue
+            try {
+                refreshVideos()
+                val fresh = db.videoDao().getAll()
+                if (fresh != lastEmitted) {
+                    lastEmitted = fresh
+                    emit(fresh)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Failed poll with a warm cache: keep showing it; the
+                // next poll retries. Never an error surface here.
             }
         }
     }.flowOn(Dispatchers.IO)
