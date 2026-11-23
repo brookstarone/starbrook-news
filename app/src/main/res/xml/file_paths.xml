@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- In-app updater (Build #25): the downloaded APK lives in app-private
+     cache storage; FileProvider serves exactly that directory to the
+     system installer, and nothing else. -->
+<paths>
+    <cache-path name="updates" path="." />
+</paths>
