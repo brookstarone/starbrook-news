@@ -12,6 +12,7 @@ import java.util.Properties
 
 apply(from = "$rootDir/gradle/font-download.gradle")
 apply(from = "$rootDir/gradle/launcher-icon-download.gradle")
+apply(from = "$rootDir/gradle/debug-signing-check.gradle")
 
 plugins {
     id("com.android.application")
@@ -53,7 +54,18 @@ android {
         // Android refusing the update. This is the conventional public
         // debug key (passwords "android") — not a secret, and not the
         // release upload key (starbrook-news-upload.jks, never committed).
-        getByName("debug") {
+        //
+        // NOTE (2026-11-19): configuring the BUILT-IN debug config with
+        // getByName("debug") did NOT take effect on CI — Builds #14/#19/#20
+        // and the #20 sign-in re-run each shipped a different
+        // runner-generated cert (verified from the v2 signing block), even
+        // though the keystore file was in the repo. So the debug build type
+        // now points at this explicitly CREATED config instead; the
+        // built-in debug config is left at its default, unused.
+        // verifyDebugSigning (gradle/debug-signing-check.gradle, hooked
+        // into preBuild) prints the keystore's cert fingerprint in the CI
+        // log, so the key that signed the APK is provable per build.
+        create("stableDebug") {
             storeFile = rootProject.file("keystores/debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
@@ -84,7 +96,7 @@ android {
             // Signed with the shared committed debug key (see
             // signingConfigs above) so CI debug builds install over
             // each other instead of each runner minting its own key.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("stableDebug")
         }
         release {
             isMinifyEnabled = false
@@ -122,7 +134,7 @@ android {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn("downloadStarBrookFonts", "downloadLauncherIcon")
+    dependsOn("downloadStarBrookFonts", "downloadLauncherIcon", "verifyDebugSigning")
 }
 
 dependencies {

@@ -1,0 +1,38 @@
+// StarBrook News — build-time debug-signing check.
+//
+// Prints the committed debug keystore's cert fingerprint (SHA-256) in the
+// build log, so the key that signed the APK is provable per CI run —
+// and fails loudly if the keystore is missing or unreadable, instead of
+// silently falling back to a runner-generated key (which is what happened
+// for Builds #14/#19/#20: each shipped a different ephemeral cert even
+// though the keystore file was in the repo).
+//
+// Expected fingerprint (keystores/debug.keystore, alias androiddebugkey):
+//   12:E1:73:D8:D6:52:80:06:33:46:D4:48:29:07:6A:7C:3E:75:A5:8E:25:A3:47:AE:7F:5A:90:DB:30:33:B0:10
+// The password "android" is the conventional public debug-key password
+// (see app/build.gradle.kts) — not a secret.
+//
+// Wiring (in app/build.gradle.kts, next to the font/icon tasks):
+//     apply(from = "$rootDir/gradle/debug-signing-check.gradle")
+//     tasks.named("preBuild").configure {
+//         dependsOn("downloadStarBrookFonts", "downloadLauncherIcon", "verifyDebugSigning")
+//     }
+
+tasks.register("verifyDebugSigning") {
+    group = "starbrook"
+    description = "Prints the debug keystore cert fingerprint; fails if the keystore is missing."
+
+    doLast {
+        def ks = rootProject.file("keystores/debug.keystore")
+        if (!ks.exists()) {
+            throw new GradleException(
+                "Debug signing: keystores/debug.keystore is missing from the checkout — " +
+                "the build would silently fall back to a runner-generated key.")
+        }
+        logger.lifecycle("Debug signing: keystore present (${ks.absolutePath}), fingerprint:")
+        exec {
+            commandLine("keytool", "-list", "-keystore", ks.absolutePath,
+                        "-storepass", "android", "-alias", "androiddebugkey")
+        }
+    }
+}
