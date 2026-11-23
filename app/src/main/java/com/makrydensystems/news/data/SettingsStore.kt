@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -119,6 +120,17 @@ class SettingsStore(context: Context) {
     val fcmTokenFlow: Flow<String?> =
         prefsFlow.map { it[Keys.FCM_TOKEN] }.distinctUntilChanged()
 
+    // Last breaking video the user has seen (tapped to play). The "New
+    // breaking video" update banner shows only for a breaking video
+    // NEWER than this id — once seen, it never re-prompts. Null until
+    // the user has played any breaking video.
+    val lastSeenBreakingVideoIdFlow: Flow<String?> =
+        prefsFlow.map { it[Keys.LAST_SEEN_BREAKING_VIDEO_ID] }.distinctUntilChanged()
+
+    suspend fun setLastSeenBreakingVideoId(id: String) {
+        dataStore.edit { it[Keys.LAST_SEEN_BREAKING_VIDEO_ID] = id }
+    }
+
     suspend fun setNewsSubscribed(enabled: Boolean) {
         dataStore.edit { it[Keys.NEWS_SUBSCRIBED] = enabled }
     }
@@ -221,6 +233,25 @@ class SettingsStore(context: Context) {
         dataStore.edit { prefs -> prefs.remove(Keys.FCM_TOKEN) }
     }
 
+    // In-app updater (2026-11-23): when the update manifest was last
+    // checked (ms epoch), and the versionCode the user tapped "Later"
+    // on. A dismissed version never re-prompts; a newer one still
+    // does. The check stamps only on a successful fetch — a failed
+    // check leaves the stamp alone so the next launch retries.
+    suspend fun lastAppUpdateCheckMs(): Long =
+        prefsFlow.first()[Keys.LAST_APP_UPDATE_CHECK_MS] ?: 0L
+
+    suspend fun setLastAppUpdateCheckMs(ms: Long) {
+        dataStore.edit { it[Keys.LAST_APP_UPDATE_CHECK_MS] = ms }
+    }
+
+    suspend fun dismissedAppUpdateVersionCode(): Int =
+        prefsFlow.first()[Keys.DISMISSED_APP_UPDATE_VERSION] ?: 0
+
+    suspend fun setDismissedAppUpdateVersionCode(versionCode: Int) {
+        dataStore.edit { it[Keys.DISMISSED_APP_UPDATE_VERSION] = versionCode }
+    }
+
     private object Keys {
         val EDITION = stringPreferencesKey("edition")
         val SECTIONS = stringSetPreferencesKey("sections")
@@ -243,6 +274,9 @@ class SettingsStore(context: Context) {
         val DEVICE_ID = stringPreferencesKey("portal_device_id")
         val WEATHER_CACHE = stringPreferencesKey("weather_cache_json")
         val FCM_TOKEN = stringPreferencesKey("fcm_token")
+        val LAST_SEEN_BREAKING_VIDEO_ID = stringPreferencesKey("last_seen_breaking_video_id")
+        val LAST_APP_UPDATE_CHECK_MS = longPreferencesKey("last_app_update_check_ms")
+        val DISMISSED_APP_UPDATE_VERSION = intPreferencesKey("dismissed_app_update_version")
     }
 
     companion object {
