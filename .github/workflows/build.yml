@@ -44,7 +44,12 @@ jobs:
       - name: Build debug APK
         env:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: gradle :app:assembleDebug --stacktrace
+        # In-app updater (Build #25): the workflow run number becomes
+        # the APK's versionCode, so the installed app can tell builds
+        # apart (every build used to ship versionCode 1). The release
+        # step writes this same number into app-update.json — see
+        # APP_UPDATE_RELEASE.md.
+        run: gradle :app:assembleDebug -PappVersionCode=${{ github.run_number }} --stacktrace
 
       # AGP ignored the debug signingConfig on CI twice (Build #22 shipped
       # a runner-generated cert despite the stableDebug config + a verified
