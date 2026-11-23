@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -749,8 +750,14 @@ fun PortalHubScreen(
                         style = StarBrookType.label,
                         color = StarBrookColors.textSecondary,
                     )
-                    Row(
+                    // FlowRow, not Row: the five chips are wider than
+                    // the screen, and a Row squeezes the last one
+                    // ("Culture") until its letters stack vertically.
+                    // FlowRow wraps the overflow onto a second line and
+                    // every chip keeps the same look.
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         for ((key, label) in listOf(
@@ -887,7 +894,11 @@ fun PortalHubScreen(
 
         // Exit 2 — back to News, bottom of the Hub.
         PortalGoldButton(text = "Back to News", onClick = onBack)
-        Spacer(modifier = Modifier.height(24.dp))
+        // Tall bottom spacer: the raised 64dp gold Portal star floats
+        // above the bottom bar and covered the last buttons (the gold
+        // "Save news settings" button was hidden under it). This lets
+        // the whole Hub scroll up clear of the star and the bar.
+        Spacer(modifier = Modifier.height(96.dp))
     }
 }
 
