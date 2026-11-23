@@ -12,6 +12,7 @@ import com.makrydensystems.news.data.WeatherRepository
 import com.makrydensystems.news.data.WeatherRepositoryImpl
 import com.makrydensystems.news.data.local.AppDatabase
 import com.makrydensystems.news.data.push.FcmRegistrar
+import com.makrydensystems.news.data.update.AppUpdateChecker
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -60,6 +61,12 @@ class AppContainer(context: Context) {
     // server so breaking + editions + weather alerts arrive as real
     // push notifications. Shares the app's OkHttpClient + SettingsStore.
     val fcmRegistrar: FcmRegistrar = FcmRegistrar(okHttpClient, settingsStore)
+
+    // In-app updater (Build #25): the app is sideloaded, so it checks
+    // its own update manifest and prompts with an Update button.
+    // Shares the app's OkHttpClient + SettingsStore.
+    val appUpdateChecker: AppUpdateChecker =
+        AppUpdateChecker(okHttpClient, appContext, settingsStore)
 
     val portalRepository: PortalRepository =
         PortalRepository(okHttpClient, portalAuth, settingsStore, database)
