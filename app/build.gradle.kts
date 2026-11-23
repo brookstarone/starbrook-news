@@ -36,7 +36,15 @@ android {
         applicationId = "com.makrydensystems.news"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
+        // In-app updater (Build #25): the app compares this code against
+        // the update manifest's versionCode, so it MUST increase with
+        // every build. CI passes -PappVersionCode=${{ github.run_number }}
+        // (the per-workflow run counter — a small int, NOT the run id,
+        // which overflows int32). Local builds default to 1. If the
+        // workflow is ever recreated and run_number restarts, the release
+        // step must set a versionCode higher than any shipped build —
+        // see APP_UPDATE_RELEASE.md.
         versionName = "1.0.0"
         // Portal sign-in: the Supabase anon key, fed from the
         // SUPABASE_ANON_KEY env var or the -PsupabaseAnonKey gradle
@@ -154,6 +162,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.foundation:foundation-layout")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("io.coil-kt:coil-compose:2.7.0")
