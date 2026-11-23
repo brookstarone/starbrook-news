@@ -72,15 +72,19 @@ private class SettingsViewModel(private val store: SettingsStore) : ViewModel() 
     fun setEdition(e: String) = viewModelScope.launch { store.setEdition(e) }
     fun setSection(s: String, on: Boolean) =
         viewModelScope.launch { store.setSectionEnabled(s, on) }
-    fun setZip(z: String?) = viewModelScope.launch { store.setZip(z) }
-    fun setNotifyBreaking(on: Boolean) =
-        viewModelScope.launch { store.setNotifyBreaking(on) }
-    fun setNotifyMorning(on: Boolean) =
-        viewModelScope.launch { store.setNotifyMorning(on) }
-    fun setNotifyEvening(on: Boolean) =
-        viewModelScope.launch { store.setNotifyEvening(on) }
-    fun setNotifyWeather(on: Boolean) =
-        viewModelScope.launch { store.setNotifyWeather(on) }
+    // Suspend (not fire-and-forget): the ZIP save handler awaits this
+    // before re-registering, or the re-register reads the stale ZIP —
+    // the same race the notify toggles had (see applyNotifyToggle).
+    suspend fun setZip(z: String?) { store.setZip(z) }
+    // Suspend (not fire-and-forget): the caller awaits the DataStore
+    // write before anything reads the toggle back. Fire-and-forget
+    // here caused a live bug (2026-11-23): turning Weather back on
+    // re-registered with the stale kinds and the server row lost
+    // "weather" — see applyNotifyToggle in SettingsScreen.
+    suspend fun setNotifyBreaking(on: Boolean) { store.setNotifyBreaking(on) }
+    suspend fun setNotifyMorning(on: Boolean) { store.setNotifyMorning(on) }
+    suspend fun setNotifyEvening(on: Boolean) { store.setNotifyEvening(on) }
+    suspend fun setNotifyWeather(on: Boolean) { store.setNotifyWeather(on) }
 
     init {
         // Mirror every notification toggle into PushModule's in-memory
@@ -183,8 +187,8 @@ private fun NotificationToggleRow(
 
 /**
  * Settings / Account (v1). Every toggle writes immediately. Sign-in
- * is a later step (auth is deferred) — the account row says so in
- * plain language instead of offering a dead button.
+ * lives in the Portal Hub (the gold Portal star in the bottom bar) —
+ * the account row points there instead of offering a dead button.
  */
 @Composable
 fun SettingsScreen(
@@ -229,6 +233,19 @@ fun SettingsScreen(
     fun refreshPushRegistration() {
         scope.launch { container.fcmRegistrar.ensureRegistered() }
     }
+    // One notification toggle changed. The DataStore write MUST
+    // complete before ensureRegistered() reads the toggle flows back,
+    // or the server is upserted with stale kinds (proven live
+    // 2026-11-23: turning Weather back on left the server row without
+    // "weather"). So the whole sequence runs in one coroutine:
+    // write -> permission prompt when turning on -> re-register.
+    fun applyNotifyToggle(set: suspend (Boolean) -> Unit, on: Boolean) {
+        scope.launch {
+            set(on)
+            if (on) requestNotificationPermissionIfNeeded()
+            container.fcmRegistrar.ensureRegistered()
+        }
+    }
 
     Column(
         modifier = modifier
@@ -240,7 +257,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(4.dp))
         SectionHeader(title = "Account")
         Text(
-            text = "Makryden account — sign-in arrives in a later update. Reading the news never needs an account.",
+            text = "Makryden account — sign in from the gold Portal star below. Reading the news never needs an account.",
             style = StarBrookType.bodySmall,
             color = StarBrookColors.textSecondary,
         )
@@ -293,8 +310,13 @@ fun SettingsScreen(
                 .clickable {
                     if (zipInput.length == 5) {
                         zipError = null
-                        vm.setZip(zipInput)
-                        refreshPushRegistration()
+                        // Same sequencing as the notify toggles: the
+                        // DataStore write must complete before the
+                        // re-register reads the ZIP back.
+                        scope.launch {
+                            vm.setZip(zipInput)
+                            refreshPushRegistration()
+                        }
                     } else {
                         zipError = "That doesn't look like a ZIP code — 5 digits."
                     }
@@ -311,41 +333,25 @@ fun SettingsScreen(
             label = "Breaking news",
             description = "Breaking news as it happens, even when the app is closed. Tapping it opens the story.",
             checked = notifyBreaking,
-            onChange = {
-                vm.setNotifyBreaking(it)
-                if (it) requestNotificationPermissionIfNeeded()
-                refreshPushRegistration()
-            },
+            onChange = { applyNotifyToggle(vm::setNotifyBreaking, it) },
         )
         NotificationToggleRow(
             label = "Morning edition",
             description = "The morning edition, when it is ready after its 7:00 AM build. Tapping it opens News.",
             checked = notifyMorning,
-            onChange = {
-                vm.setNotifyMorning(it)
-                if (it) requestNotificationPermissionIfNeeded()
-                refreshPushRegistration()
-            },
+            onChange = { applyNotifyToggle(vm::setNotifyMorning, it) },
         )
         NotificationToggleRow(
             label = "Evening edition",
             description = "The evening edition, when it is ready after its 4:00 PM build. Tapping it opens News.",
             checked = notifyEvening,
-            onChange = {
-                vm.setNotifyEvening(it)
-                if (it) requestNotificationPermissionIfNeeded()
-                refreshPushRegistration()
-            },
+            onChange = { applyNotifyToggle(vm::setNotifyEvening, it) },
         )
         NotificationToggleRow(
             label = "Weather alerts",
             description = "Severe weather warnings and rain starting soon, for your ZIP code. Tapping it opens Weather.",
             checked = notifyWeather,
-            onChange = {
-                vm.setNotifyWeather(it)
-                if (it) requestNotificationPermissionIfNeeded()
-                refreshPushRegistration()
-            },
+            onChange = { applyNotifyToggle(vm::setNotifyWeather, it) },
         )
         Spacer(modifier = Modifier.height(24.dp))
     }
