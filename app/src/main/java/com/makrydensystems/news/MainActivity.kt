@@ -66,9 +66,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        deepLinkRoute.value = intent?.getStringExtra(StarBrookMessagingService.EXTRA_ROUTE)
+        deepLinkRoute.value = intent.getStringExtra(StarBrookMessagingService.EXTRA_ROUTE)
     }
 }
 
