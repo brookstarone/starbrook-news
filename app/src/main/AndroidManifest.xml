@@ -6,6 +6,11 @@
     <!-- FCM push (Build #24): Android 13+ needs this at runtime — the
          Settings toggles request it when first turned on. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- In-app updater (Build #25): the system installer needs this
+         declared before canRequestPackageInstalls() can ever return
+         true; the user still grants it per-app on the unknown-sources
+         settings screen (the dialog sends them there). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -36,6 +41,20 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+        <!-- In-app updater (Build #25): hands the downloaded APK to the
+             system installer. ${applicationId} resolves per build type
+             (debug carries the .debug suffix); the file lives in
+             app-private cache storage (res/xml/file_paths.xml). Not
+             exported: only the installer reads it, via the granted URI. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <!-- Fallbacks if a message ever arrives without a channel id in
              its data (the server always sets one — see _shared/fcm.ts). -->
         <meta-data
