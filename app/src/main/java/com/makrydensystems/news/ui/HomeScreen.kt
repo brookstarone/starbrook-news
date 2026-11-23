@@ -3,6 +3,7 @@ package com.makrydensystems.news.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,8 +31,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -71,6 +74,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -150,6 +154,42 @@ private class HomeViewModel(
         .asFeedState()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FeedState.Loading)
 
+    // Breaking flash, top of Home (2026-11-23, Nvidia gap): the manifest
+    // lists newest first, so the first entry is the newest content. When
+    // that entry is a breaking flash it gets a prominent card at the top
+    // of Home — independent of breaking.json, which clears within hours
+    // and left the flash buried at the bottom of the list. Once a newer
+    // briefing lands, the flash drops back to the list below.
+    val topBreakingVideo: StateFlow<BriefingVideo?> = videos
+        .map { state ->
+            if (state is FeedState.Data) {
+                state.value.firstOrNull()?.takeIf { it.isBreaking }
+            } else {
+                null
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // "New breaking video" update prompt: the newest breaking video the
+    // user has not seen yet (seen = tapped to play, persisted in
+    // DataStore). Null when there is nothing new — the banner never
+    // re-prompts for a video already watched.
+    val newBreakingVideo: StateFlow<BriefingVideo?> = combine(
+        videos,
+        settings.lastSeenBreakingVideoIdFlow,
+    ) { state, seenId ->
+        if (state is FeedState.Data) {
+            state.value.firstOrNull()?.takeIf { it.isBreaking && it.id != seenId }
+        } else {
+            null
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // Tapping any breaking video marks it seen (the banner goes away).
+    fun markBreakingVideoSeen(id: String) {
+        viewModelScope.launch { settings.setLastSeenBreakingVideoId(id) }
+    }
+
     // Wave 2: Originals (PostgREST, published rows) and Markets (the
     // current edition's at-a-glance line + Markets section). Both ride
     // the same refreshTick retry as the other feeds. Originals is empty
@@ -216,6 +256,8 @@ fun HomeScreen(
     val breaking by vm.breaking.collectAsState()
     val liveState by vm.liveNow.collectAsState()
     val videosState by vm.videos.collectAsState()
+    val topBreakingVideo by vm.topBreakingVideo.collectAsState()
+    val newBreakingVideo by vm.newBreakingVideo.collectAsState()
     val originalsState by vm.originals.collectAsState()
     val marketsData by vm.markets.collectAsState()
     val isRefreshing by vm.isRefreshing.collectAsState()
@@ -230,6 +272,14 @@ fun HomeScreen(
         if (!isSignedIn && !saved) onPortalClick()
     }
 
+    // Tapping any breaking video marks it seen (the update banner goes
+    // away) — the top card, the banner, and the bottom list all route
+    // through here, so every path to the video counts as seeing it.
+    val handleVideoClick: (BriefingVideo) -> Unit = { video ->
+        if (video.isBreaking) vm.markBreakingVideoSeen(video.id)
+        onVideoClick(video)
+    }
+
     // Section navigation (drawer): null = Top Stories = whole edition.
     val selectedSection by vm.selectedSection.collectAsState()
     val drawerSelected = selectedSection ?: DRAWER_SECTIONS.first()
@@ -239,9 +289,10 @@ fun HomeScreen(
 
     // Index of the "Video briefings" header in the LazyColumn, computed
     // from the same states that build the list: sections button, search,
-    // breaking, ticker, edition switcher, stories block, spacer, Live
-    // header, live block, spacer. Coerced at scroll time against the
-    // real count.
+    // update banner (when an unseen breaking video exists), breaking,
+    // top breaking card (when the newest video is a flash), ticker,
+    // edition switcher, stories block, spacer, Live header, live block,
+    // spacer. Coerced at scroll time against the real count.
     val videoHeaderIndex: () -> Int = {
         val storyItems = when (val state = storiesState) {
             is FeedState.Loading -> 1
@@ -265,7 +316,11 @@ fun HomeScreen(
             is FeedState.Data -> if (state.value.isNotEmpty()) 1 else 0
             else -> 0
         }
-        7 + tickerItems + storyItems + liveItems
+        // The update banner and the top breaking card sit above the
+        // stories, so each shifts the target down by one when present.
+        val bannerItems = (if (newBreakingVideo != null) 1 else 0) +
+            (if (topBreakingVideo != null) 1 else 0)
+        7 + bannerItems + tickerItems + storyItems + liveItems
     }
 
     // One drawer tap = close the drawer, then go: Weather routes off
@@ -357,11 +412,31 @@ fun HomeScreen(
                 )
             }
         }
+        // UPDATE BANNER (2026-11-23, Nvidia gap): a breaking flash that
+        // arrived since the user last looked gets an explicit Update
+        // prompt at the very top — no silent burial below the fold.
+        // Tapping it plays the flash and marks it seen.
+        newBreakingVideo?.let { video ->
+            item {
+                NewBreakingVideoBanner(
+                    video = video,
+                    onWatch = { handleVideoClick(video) },
+                )
+            }
+        }
         item {
             BreakingStrip(
                 breaking = breaking,
                 onClick = { breaking?.let { onBreakingClick(it) } },
             )
+        }
+        // TOP BREAKING VIDEO CARD (same gap): when the manifest's newest
+        // entry is a breaking flash it sits here as a full card —
+        // independent of breaking.json, which clears within hours.
+        topBreakingVideo?.let { video ->
+            item {
+                VideoCard(video = video, onClick = { handleVideoClick(video) })
+            }
         }
         // LIVE ticker (web .liveticker, right under the breaking
         // strip): the live items, one headline at a time, tappable
@@ -502,7 +577,7 @@ fun HomeScreen(
                     state.value.take(3)
                 }
                 items(videos) { video ->
-                    VideoCard(video = video, onClick = { onVideoClick(video) })
+                    VideoCard(video = video, onClick = { handleVideoClick(video) })
                 }
             }
         }
@@ -585,6 +660,61 @@ private fun EditionSwitcher(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
                 )
             }
+        }
+    }
+}
+
+/**
+ * "New breaking video" update prompt (2026-11-23, Nvidia gap): the
+ * visible Update affordance for breaking content. Gold, one row, the
+ * whole row taps through to play the flash. Shows only while the
+ * newest breaking video is unseen — once played, the id is persisted
+ * and the banner never re-prompts for it.
+ */
+@Composable
+private fun NewBreakingVideoBanner(
+    video: BriefingVideo,
+    onWatch: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(onClick = onWatch),
+        shape = StarBrookShapes.card,
+        color = StarBrookColors.gold,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "UPDATE — NEW BREAKING VIDEO",
+                    style = StarBrookType.label,
+                    color = StarBrookColors.onGold,
+                    maxLines = 1,
+                )
+                Text(
+                    text = video.title,
+                    style = StarBrookType.body,
+                    color = StarBrookColors.onGold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = "Watch",
+                style = StarBrookType.label,
+                color = StarBrookColors.onGold,
+                maxLines = 1,
+            )
         }
     }
 }
