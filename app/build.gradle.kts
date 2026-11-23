@@ -161,10 +161,14 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.3.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
+    // Room 2.7.1 (was 2.6.1): Build #24 failed at :app:kaptDebugKotlin
+    // because Room 2.6.1's metadata reader caps at Kotlin metadata
+    // 2.0.0, while firebase-messaging 26.0.2 is compiled with Kotlin
+    // 2.1 (metadata 2.1.0). Room 2.7.x reads 2.1.0 metadata.
+    implementation("androidx.room:room-runtime:2.7.1")
+    implementation("androidx.room:room-ktx:2.7.1")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-    kapt("androidx.room:room-compiler:2.6.1")
+    kapt("androidx.room:room-compiler:2.7.1")
     // Firebase Cloud Messaging (Build #24): push notifications from the
     // app itself. BoM 35.2.0 = latest per the Firebase Android release
     // notes, 2026-11-11 (firebase-messaging 26.0.2). The BoM pins the
