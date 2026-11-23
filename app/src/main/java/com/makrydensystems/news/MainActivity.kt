@@ -38,6 +38,7 @@ import com.makrydensystems.news.ui.SearchScreen
 import com.makrydensystems.news.ui.SettingsScreen
 import com.makrydensystems.news.ui.VideoScreen
 import com.makrydensystems.news.ui.WeatherScreen
+import com.makrydensystems.news.ui.components.AppUpdateDialog
 import com.makrydensystems.news.ui.components.PortalCoachMark
 import com.makrydensystems.news.ui.components.PortalHubScreen
 import com.makrydensystems.news.ui.components.PortalStarButton
@@ -117,6 +118,15 @@ private fun StarBrookApp(container: AppContainer, deepLinkRoute: MutableStateFlo
     LaunchedEffect(Unit) {
         NotificationChannels.createChannels(appContext)
         container.fcmRegistrar.ensureRegistered()
+    }
+    // In-app updater (Build #25): check on launch, then once a day
+    // while the app stays open. The dialog below carries the visible
+    // Update button — no browser, no Drive link, the whole flow runs
+    // in-app. Check failures are silent by design.
+    val updateChecker = container.appUpdateChecker
+    val updateState by updateChecker.state.collectAsState()
+    LaunchedEffect(Unit) {
+        updateChecker.monitorUpdates()
     }
     // Notification tap: navigate to the pushed route once, then clear
     // it so a recomposition does not re-navigate. The route was already
@@ -343,4 +353,16 @@ private fun StarBrookApp(container: AppContainer, deepLinkRoute: MutableStateFlo
             }
         }
     }
+    // In-app update prompt (Build #25): renders above every screen.
+    // "Later" records this version as dismissed; a failed download's
+    // Later only hides it for this session, so the next check
+    // re-prompts.
+    AppUpdateDialog(
+        state = updateState,
+        onUpdate = { scope.launch { updateChecker.startUpdate() } },
+        onInstall = { updateChecker.installDownloaded() },
+        onOpenSettings = { updateChecker.openUnknownSourcesSettings() },
+        onLater = { scope.launch { updateChecker.dismissUpdate() } },
+        onHide = { updateChecker.hidePrompt() },
+    )
 }
