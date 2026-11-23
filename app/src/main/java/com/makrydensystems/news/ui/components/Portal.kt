@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -548,6 +549,7 @@ private class PortalViewModel(private val container: AppContainer) : ViewModel()
  * settings, the Master Room (operators only), and "How Saved works".
  * Every path out is listed above the ViewModel.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PortalHubScreen(
     container: AppContainer,
