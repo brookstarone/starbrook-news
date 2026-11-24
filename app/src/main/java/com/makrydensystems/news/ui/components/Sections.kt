@@ -16,11 +16,12 @@ import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
 
 /**
- * Markets (Wave 2): the edition's at-a-glance ticker line plus the
- * edition's "Markets" section stories. Both come from the edition JSON
- * ([MarketsData]); the label is the shared drawer label "Markets".
- * Hidden entirely when the edition carries neither (the repository
- * emits null then), never an empty card.
+ * Business (Wave 2): the edition's at-a-glance ticker line plus the
+ * edition's Business section stories. Both come from the edition JSON
+ * ([MarketsData]); the header is the section's own JSON name
+ * ([MarketsData.sectionName]) — never hardcoded. Hidden entirely when
+ * the edition carries neither (the repository emits null then), never
+ * an empty card.
  */
 @Composable
 fun MarketsSection(
@@ -32,7 +33,7 @@ fun MarketsSection(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SectionHeader(title = "Markets")
+        SectionHeader(title = markets.sectionName)
         if (markets.markets.isNotBlank()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
