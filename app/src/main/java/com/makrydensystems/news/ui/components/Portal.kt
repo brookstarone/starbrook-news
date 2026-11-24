@@ -492,8 +492,9 @@ private class PortalViewModel(private val container: AppContainer) : ViewModel()
     fun savePrefs() {
         viewModelScope.launch {
             _prefsSavedMessage.value = "Saving…"
-            // Preserve web-only section ids (sports/faith) the app never
-            // shows: merge the server row's sections with the local set.
+            // Preserve any section ids the server row carries that the
+            // app does not know (future web-only ids): merge the server
+            // row's sections with the local set.
             val server = runCatching { repo.loadNewsroomPrefs() }.getOrNull()
             val local = _prefs.value
             val mergedSections = when {
@@ -752,9 +753,9 @@ fun PortalHubScreen(
                         style = StarBrookType.label,
                         color = StarBrookColors.textSecondary,
                     )
-                    // FlowRow, not Row: the five chips are wider than
+                    // FlowRow, not Row: the eleven chips are wider than
                     // the screen, and a Row squeezes the last one
-                    // ("Culture") until its letters stack vertically.
+                    // ("Fashion") until its letters stack vertically.
                     // FlowRow wraps the overflow onto a second line and
                     // every chip keeps the same look.
                     FlowRow(
@@ -768,6 +769,14 @@ fun PortalHubScreen(
                             "tech" to "Tech",
                             "business" to "Business",
                             "culture" to "Culture",
+                            // R-02 (2026-11-24): the six sections the Hub
+                            // could never toggle — same set as Settings.
+                            "sports" to "Sports",
+                            "faith" to "Faith",
+                            "science" to "Science",
+                            "entertainment" to "Entertainment",
+                            "gaming" to "Gaming",
+                            "fashion" to "Fashion",
                         )) {
                             val on = key in sections
                             Surface(
