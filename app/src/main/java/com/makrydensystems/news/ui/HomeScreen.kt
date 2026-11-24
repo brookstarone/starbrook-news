@@ -120,13 +120,14 @@ private class HomeViewModel(
         settings.sectionsFlow,
         selectedSection,
     ) { list, enabled, selected ->
-            // FILTER FIX (drawer): SettingsStore.ALL_SECTIONS is only
-            // {national, local, tech, business, culture} — the prefs filter
-            // alone drops Sports / Faith / Science (6 of 15 live stories).
-            // A drawer section's stories must survive it: the active drawer
-            // section always passes, and Home then filters the displayed
-            // list to that section. With no drawer section active this is
-            // exactly the old prefs-only filter.
+            // R-02 (2026-11-24): SettingsStore.ALL_SECTIONS now holds all
+            // eleven live sections, so the prefs filter alone no longer
+            // drops Sports / Faith / Science / Entertainment / Gaming /
+            // Fashion (6 of 17 in the 2026-11-24 morning edition). A
+            // drawer section's stories still always pass — the active
+            // drawer section overrides a Settings toggle-off, and Home
+            // then filters the displayed list to that section. With no
+            // drawer section active this is the prefs filter on its own.
             val active = if (selected != null &&
                 (selected.kind == DrawerSectionKind.STORIES ||
                     selected.kind == DrawerSectionKind.MARKETS)
