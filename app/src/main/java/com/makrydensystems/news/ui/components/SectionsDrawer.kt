@@ -1,6 +1,9 @@
 package com.makrydensystems.news.ui.components
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalDrawerSheet
@@ -36,8 +39,11 @@ import com.makrydensystems.news.ui.theme.StarBrookType
  *   live 2026-11-19: 5 morning/evening briefings + 3 breaking flashes).
  * - Oklahoma -> section "local"; Culture -> "culture"; Sports -> "sports";
  *   Tech -> "tech"; Faith -> "faith"; Science -> "science".
- * - The drawer deliberately does NOT list Entertainment / Gaming / Fashion
- *   (live edition sections, but not in the website drawer) or Saved.
+ * - Entertainment -> "entertainment"; Gaming -> "gaming";
+ *   Fashion -> "fashion" (R-02, 2026-11-24: the website drawer does not
+ *   list these three, but the app must — without a row they were reachable
+ *   only by guessing a search query).
+ * - Saved is deliberately not listed (it lives in the bottom bar).
  * - Business was "Markets" until Build #26: the drawer carried both a
  *   MARKETS row and a STORIES "Business" row resolving to the same
  *   "business" stories, so the rename merged them into the one row below.
@@ -77,6 +83,9 @@ val DRAWER_SECTIONS: List<DrawerSection> = listOf(
     DrawerSection("Tech", DrawerSectionKind.STORIES, "tech"),
     DrawerSection("Faith", DrawerSectionKind.STORIES, "faith"),
     DrawerSection("Science", DrawerSectionKind.STORIES, "science"),
+    DrawerSection("Entertainment", DrawerSectionKind.STORIES, "entertainment"),
+    DrawerSection("Gaming", DrawerSectionKind.STORIES, "gaming"),
+    DrawerSection("Fashion", DrawerSectionKind.STORIES, "fashion"),
 )
 
 /**
@@ -104,43 +113,52 @@ fun SectionsDrawer(
                 drawerContainerColor = StarBrookColors.surface,
                 drawerContentColor = StarBrookColors.textPrimary,
             ) {
-                Text(
-                    text = "STARBROOK NEWS",
-                    style = StarBrookType.label,
-                    color = StarBrookColors.gold,
-                    modifier = Modifier.padding(start = 28.dp, top = 24.dp, end = 24.dp),
-                )
-                Text(
-                    text = "Sections",
-                    style = StarBrookType.title,
-                    color = StarBrookColors.textPrimary,
-                    modifier = Modifier.padding(start = 28.dp, top = 4.dp, end = 24.dp),
-                )
-                Text(
-                    text = "Tap a section to jump to it",
-                    style = StarBrookType.bodySmall,
-                    color = StarBrookColors.textSecondary,
-                    modifier = Modifier.padding(start = 28.dp, end = 24.dp, bottom = 12.dp),
-                )
-                HorizontalDivider(color = StarBrookColors.border)
-                for (section in DRAWER_SECTIONS) {
-                    NavigationDrawerItem(
-                        label = {
-                            Text(
-                                text = section.label,
-                                style = StarBrookType.body,
-                            )
-                        },
-                        selected = section == selected,
-                        onClick = { onSelect(section) },
-                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                        colors = NavigationDrawerItemDefaults.colors(
-                            selectedContainerColor = StarBrookColors.goldsoft,
-                            unselectedContainerColor = Color.Transparent,
-                            selectedTextColor = StarBrookColors.textPrimary,
-                            unselectedTextColor = StarBrookColors.textPrimary,
-                        ),
+                // R-02 (2026-11-24): ModalDrawerSheet does not scroll its
+                // content on its own — with thirteen rows the bottom
+                // entries clip on short screens / large font scales, which
+                // would leave the new Entertainment / Gaming / Fashion
+                // rows unreachable. The scrollable Column is the
+                // documented Material 3 pattern; no visual change when
+                // everything fits.
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        text = "STARBROOK NEWS",
+                        style = StarBrookType.label,
+                        color = StarBrookColors.gold,
+                        modifier = Modifier.padding(start = 28.dp, top = 24.dp, end = 24.dp),
                     )
+                    Text(
+                        text = "Sections",
+                        style = StarBrookType.title,
+                        color = StarBrookColors.textPrimary,
+                        modifier = Modifier.padding(start = 28.dp, top = 4.dp, end = 24.dp),
+                    )
+                    Text(
+                        text = "Tap a section to jump to it",
+                        style = StarBrookType.bodySmall,
+                        color = StarBrookColors.textSecondary,
+                        modifier = Modifier.padding(start = 28.dp, end = 24.dp, bottom = 12.dp),
+                    )
+                    HorizontalDivider(color = StarBrookColors.border)
+                    for (section in DRAWER_SECTIONS) {
+                        NavigationDrawerItem(
+                            label = {
+                                Text(
+                                    text = section.label,
+                                    style = StarBrookType.body,
+                                )
+                            },
+                            selected = section == selected,
+                            onClick = { onSelect(section) },
+                            modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                            colors = NavigationDrawerItemDefaults.colors(
+                                selectedContainerColor = StarBrookColors.goldsoft,
+                                unselectedContainerColor = Color.Transparent,
+                                selectedTextColor = StarBrookColors.textPrimary,
+                                unselectedTextColor = StarBrookColors.textPrimary,
+                            ),
+                        )
+                    }
                 }
             }
         },
