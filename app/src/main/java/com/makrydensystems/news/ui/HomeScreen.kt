@@ -190,8 +190,8 @@ private class HomeViewModel(
         viewModelScope.launch { settings.setLastSeenBreakingVideoId(id) }
     }
 
-    // Wave 2: Originals (PostgREST, published rows) and Markets (the
-    // current edition's at-a-glance line + Markets section). Both ride
+    // Wave 2: Originals (PostgREST, published rows) and Business (the
+    // current edition's at-a-glance line + Business section). Both ride
     // the same refreshTick retry as the other feeds. Originals is empty
     // until the anon key is wired (TODO.md §1) — the section then hides.
     val originals: StateFlow<FeedState<List<Story>>> = refreshTick
@@ -581,14 +581,14 @@ fun HomeScreen(
                 }
             }
         }
-        // SECTIONS (Wave 2): Originals + Markets. They render only on
+        // SECTIONS (Wave 2): Originals + Business. They render only on
         // Top Stories (no drawer filter active — a filter means "only
         // this section") and sit BELOW the video block on purpose:
         // videoHeaderIndex above counts the items above "Video
         // briefings", and anything inserted above it would shift the
         // drawer scroll target. Originals come from PostgREST (empty
-        // until the anon key is wired — TODO.md §1); Markets from the
-        // current edition's atAGlance + Markets section.
+        // until the anon key is wired — TODO.md §1); Business from the
+        // current edition's atAGlance + Business section.
         if (selectedSection == null) {
             when (val state = originalsState) {
                 is FeedState.Loading -> {}
@@ -618,9 +618,8 @@ fun HomeScreen(
 /**
  * Stories shown for the active drawer section (null = Top Stories =
  * the whole edition, unfiltered). STORIES and MARKETS both filter by
- * the edition JSON's lowercase `section` value — Markets and Business
- * both resolve to "business" because the live editions carry exactly
- * one business story, in the Markets section.
+ * the edition JSON's lowercase `section` value — the Business drawer
+ * entry filters to "business".
  */
 private fun visibleStoriesFor(stories: List<Story>, active: DrawerSection?): List<Story> {
     val wanted: String? = if (active != null &&
