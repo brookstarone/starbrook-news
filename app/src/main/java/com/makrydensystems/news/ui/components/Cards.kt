@@ -507,6 +507,12 @@ private fun PlayBadge(modifier: Modifier = Modifier) {
  * duration chip that never overlaps the title. Breaking flashes get
  * the live-red treatment on the chip. Tapping opens the native
  * Media3 player (video/{id}) — never a WebView, never a browser.
+ *
+ * Label (Build #26): a daily briefing is named by its edition, not by
+ * the manifest title — "Morning briefing" / "Evening briefing" — with
+ * its runtime ("0:57", "1:26") on the card, so the Home "Video
+ * briefings" row reads as named buttons. Breaking flashes keep the
+ * manifest title (they are not an edition briefing).
  */
 @Composable
 fun VideoCard(
@@ -576,15 +582,30 @@ fun VideoCard(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                // Daily briefings are named by edition ("Morning
+                // briefing" / "Evening briefing") with the runtime on
+                // the card; breaking flashes and anything else keep the
+                // manifest title + edition caption.
+                val isDailyBriefing = !video.isBreaking &&
+                    (video.edition.equals("morning", ignoreCase = true) ||
+                        video.edition.equals("evening", ignoreCase = true))
                 Text(
-                    text = video.title,
+                    text = if (isDailyBriefing) {
+                        video.edition.replaceFirstChar { it.uppercaseChar() } + " briefing"
+                    } else {
+                        video.title
+                    },
                     style = StarBrookType.title,
                     color = StarBrookColors.textPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${video.edition} briefing · ${video.date}",
+                    text = if (isDailyBriefing) {
+                        "${video.duration} · ${video.date}"
+                    } else {
+                        "${video.edition} briefing · ${video.date}"
+                    },
                     style = StarBrookType.caption,
                     color = StarBrookColors.textSecondary,
                     maxLines = 1,
