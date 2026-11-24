@@ -273,6 +273,15 @@ fun SettingsScreen(
             "tech" to "Tech",
             "business" to "Business",
             "culture" to "Culture",
+            // R-02 (2026-11-24): these six were missing here too — the
+            // Home filter dropped them and there was no toggle to turn
+            // them back on. Same order as SettingsStore.ALL_SECTIONS.
+            "sports" to "Sports",
+            "faith" to "Faith",
+            "science" to "Science",
+            "entertainment" to "Entertainment",
+            "gaming" to "Gaming",
+            "fashion" to "Fashion",
         )) {
             ToggleRow(label, key in sections, onChange = { vm.setSection(key, it) })
         }
