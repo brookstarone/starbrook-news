@@ -34,9 +34,11 @@ import java.security.MessageDigest
 //     The row holds: subscribed (master on/off), morning, evening,
 //     breaking, sections (array of ids, or NULL for all). Portal
 //     section ids: national, local, tech, business, sports, faith,
-//     culture. The app only offers national/local/tech/business/culture
-//     (SettingsStore.ALL_SECTIONS); sports/faith rows from the web are
-//     preserved untouched on save (read-modify-write keeps them).
+//     culture, science, entertainment, gaming, fashion. The app offers
+//     all eleven (SettingsStore.ALL_SECTIONS, R-02 2026-11-24 —
+//     sports/faith used to be web-only and were dropped locally on
+//     sign-in); ids outside the eleven are preserved untouched on save
+//     (read-modify-write keeps them).
 //
 //   shelf_items (migration 20261021000000_shelf_items.sql):
 //     id = client UUID, url_hash = lowercase hex SHA-1 of the canonical
@@ -84,8 +86,8 @@ data class NewsroomPrefs(
     val morning: Boolean = true,
     val evening: Boolean = true,
     val breaking: Boolean = true,
-    /** null = all sections (server meaning). App sections are a subset;
-     * ids outside the app's five are preserved on save. */
+    /** null = all sections (server meaning). App sections are all eleven;
+     * ids outside the app's eleven are preserved on save. */
     val sections: List<String>? = null,
 )
 
@@ -182,7 +184,7 @@ class PortalRepository(
     }
 
     /** The prefs the Hub edits, from local state (instant, offline-safe).
-     * The web-only section ids (sports/faith) are NOT in the local set;
+     * Section ids outside the app's eleven are NOT in the local set;
      * saveNewsroomPrefs merges them back in via [loadNewsroomPrefs] —
      * callers that save should load first when signed in. */
     suspend fun localNewsroomPrefs(): NewsroomPrefs {
