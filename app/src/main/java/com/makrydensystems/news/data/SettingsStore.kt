@@ -41,7 +41,7 @@ class SettingsStore(context: Context) {
         prefsFlow.map { it[Keys.EDITION] ?: DEFAULT_EDITION }
 
     val sectionsFlow: Flow<Set<String>> =
-        prefsFlow.map { it[Keys.SECTIONS] ?: ALL_SECTIONS }
+        prefsFlow.map { migratedSections(it) }
 
     // distinctUntilChanged is load-bearing (tap-test #5): prefsFlow is
     // the raw DataStore flow and re-emits on EVERY write — including the
@@ -185,10 +185,33 @@ class SettingsStore(context: Context) {
         dataStore.edit { it[Keys.EDITION] = edition }
     }
 
+    /**
+     * R-02 (2026-11-24): the enabled-set a user stored before this fix
+     * only ever held the original five sections — the six new ones
+     * (sports/faith/science/entertainment/gaming/fashion) were never
+     * offered, so their absence cannot mean "turned off". A stored set
+     * therefore gains the six on first read, while the user's off-choices
+     * among the original five stay exactly as stored. Fresh installs
+     * (no stored set) get all eleven. The flag is set by the first
+     * [setSectionEnabled] write, which persists the migrated set; until
+     * then this in-memory view is already correct, so Home shows all
+     * 17 stories from the first launch after upgrade.
+     */
+    private fun migratedSections(prefs: Preferences): Set<String> {
+        val stored = prefs[Keys.SECTIONS] ?: return ALL_SECTIONS
+        if (prefs[Keys.SECTIONS_MIGRATED_R02] == true) return stored
+        return stored + SECTIONS_ADDED_R02
+    }
+
     suspend fun setSectionEnabled(section: String, enabled: Boolean) {
         dataStore.edit { prefs ->
-            val current = prefs[Keys.SECTIONS] ?: ALL_SECTIONS
+            // Base on the migrated view, not the raw stored set: a stored
+            // set predating R-02 lacks the six new sections, and reading
+            // the raw set here would make turning one of them off a
+            // silent no-op (it was never in the set to remove).
+            val current = migratedSections(prefs)
             prefs[Keys.SECTIONS] = if (enabled) current + section else current - section
+            prefs[Keys.SECTIONS_MIGRATED_R02] = true
         }
     }
 
@@ -255,6 +278,7 @@ class SettingsStore(context: Context) {
     private object Keys {
         val EDITION = stringPreferencesKey("edition")
         val SECTIONS = stringSetPreferencesKey("sections")
+        val SECTIONS_MIGRATED_R02 = booleanPreferencesKey("sections_migrated_r02")
         val ZIP = stringPreferencesKey("zip")
         val NOTIFY_BREAKING = booleanPreferencesKey("notify_breaking")
         val NOTIFY_MORNING = booleanPreferencesKey("notify_morning")
@@ -281,8 +305,21 @@ class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_EDITION = "morning"
+        // R-02 (2026-11-24): every section value the live editions carry.
+        // The old five-only set silently dropped Sports / Faith / Science /
+        // Entertainment / Gaming / Fashion from Top Stories (6 of 17 in
+        // the 2026-11-24 morning edition). New sections are on by default;
+        // users turn them off in Settings / the Portal Hub like the rest.
         val ALL_SECTIONS: Set<String> =
-            setOf("national", "local", "tech", "business", "culture")
+            setOf(
+                "national", "local", "tech", "business", "culture",
+                "sports", "faith", "science",
+                "entertainment", "gaming", "fashion",
+            )
+        // Sections added by R-02; a stored set gains exactly these on
+        // first read after upgrade — see migratedSections.
+        val SECTIONS_ADDED_R02: Set<String> =
+            setOf("sports", "faith", "science", "entertainment", "gaming", "fashion")
     }
 }
 
