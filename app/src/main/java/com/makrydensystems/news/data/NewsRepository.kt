@@ -72,11 +72,11 @@ interface NewsRepository {
     suspend fun refreshBreaking(): Breaking?
     suspend fun refreshEdition(edition: String)
 
-    // --- Wave 2: Originals + Markets + full-body read ---
+    // --- Wave 2: Originals + Business + full-body read ---
     /** Published StarBrook Originals (PostgREST). Empty when the anon key is not wired yet. */
     fun originalsFlow(): Flow<List<Story>>
 
-    /** Markets for one edition slot: at-a-glance line + the edition's "Markets" section stories. Null when the edition carries neither. */
+    /** Business for one edition slot: at-a-glance line + the edition's "Business" section stories. Null when the edition carries neither. */
     fun marketsFlow(edition: String): Flow<MarketsData?>
 
     /** One published Original by id (the ?original= read-page param), with its stored full body. Null when unknown or the key is not wired. */
@@ -89,11 +89,17 @@ interface NewsRepository {
     suspend fun extractBody(articleUrl: String): ExtractResult
 }
 
-/** Markets section data: the at-a-glance ticker line plus the edition's Markets stories. */
+/** Business section data: the at-a-glance ticker line plus the edition's Business stories.
+ * [sectionName] is the display name straight from the edition JSON's section entry
+ * ("Business" in the evening edition; the morning edition still says "Markets" until
+ * the edition pipeline renames it — the app shows whatever the JSON says, never a
+ * hardcoded label). It falls back to "Business" when the edition carries a markets
+ * line but no matching section. */
 data class MarketsData(
     val markets: String,
     val marketsLabel: String?,
     val stories: List<Story>,
+    val sectionName: String,
 )
 
 /** A published Original with its stored full body (the row's `body` column — no extraction needed). */
@@ -119,8 +125,8 @@ sealed interface ExtractResult {
  * stale-edition fallback in refreshEdition: a file older than
  * EDITION_STALE_MS is "not built yet" for its slot.
  * Wave 2 also reads "sections" (the edition's named sections — "Top
- * Stories", "Markets", "Oklahoma", ...; each carries its stories) and
- * "atAGlance.markets" (the ticker line) for the Markets section.
+ * Stories", "Business", "Oklahoma", ...; each carries its stories) and
+ * "atAGlance.markets" (the ticker line) for the Business section.
  */
 @Serializable
 private data class EditionResponse(
@@ -132,6 +138,11 @@ private data class EditionResponse(
 
 @Serializable
 private data class EditionSection(
+    // The edition JSON's sections carry id + name (the business section's
+    // name is "Business"). "id" is absent from the live files today
+    // (name only) — the default keeps the decode safe either way, and the
+    // match below prefers the id when it is present.
+    val id: String = "",
     val name: String = "",
     val stories: List<Story> = emptyList(),
 )
@@ -419,7 +430,7 @@ class NewsRepositoryImpl(
         }
     }.flowOn(Dispatchers.IO)
 
-    // --- Wave 2: Originals + Markets + full-body read ---
+    // --- Wave 2: Originals + Business + full-body read ---
 
     override fun originalsFlow(): Flow<List<Story>> = flow {
         emit(originalsCache.map { it.story })
@@ -452,7 +463,7 @@ class NewsRepositoryImpl(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            // Markets is a below-fold section: a failed fetch hides it
+            // Business is a below-fold section: a failed fetch hides it
             // instead of erroring the screen. The next collect retries.
             if (marketsCache[edition] == null) emit(null)
         }
@@ -547,18 +558,27 @@ class NewsRepositoryImpl(
         originalsCache = rows.map { it.toOriginalStory() }
     }
 
-    /** Markets for one edition slot, from the edition JSON file itself. */
+    /** Business for one edition slot, from the edition JSON file itself.
+     * The section is matched by id "business" when the JSON carries one,
+     * else by name — "Business" (evening edition) or the pre-rename
+     * "Markets" (morning edition still carries it). The displayed name is
+     * the matched section's own JSON name, verbatim — never hardcoded —
+     * falling back to "Business" when only the markets line is present. */
     private suspend fun fetchMarkets(edition: String): MarketsData? {
         val parsed = fetchEditionJson(edition)
         val marketsLine = parsed.atAGlance?.markets?.takeIf { it.isNotBlank() }
-        val sectionStories = parsed.sections
-            .firstOrNull { it.name.equals("Markets", ignoreCase = true) }
-            ?.stories.orEmpty()
+        val section = parsed.sections.firstOrNull {
+            it.id.equals("business", ignoreCase = true) ||
+                it.name.equals("Business", ignoreCase = true) ||
+                it.name.equals("Markets", ignoreCase = true)
+        }
+        val sectionStories = section?.stories.orEmpty()
         if (marketsLine == null && sectionStories.isEmpty()) return null
         return MarketsData(
             markets = marketsLine.orEmpty(),
             marketsLabel = parsed.atAGlance?.marketsLabel,
             stories = sectionStories,
+            sectionName = section?.name?.takeIf { it.isNotBlank() } ?: "Business",
         )
     }
 
@@ -731,7 +751,7 @@ class NewsRepositoryImpl(
     /** One edition file plus its build time (null when the file predates builtAt). */
     private data class EditionFile(val stories: List<Story>, val builtAtMs: Long?)
 
-    /** The whole edition file, parsed once — the cache path reads stories/builtAt, Markets reads sections/atAGlance. */
+    /** The whole edition file, parsed once — the cache path reads stories/builtAt, Business reads sections/atAGlance. */
     private suspend fun fetchEditionJson(edition: String): EditionResponse {
         val url = StarBrookApi.STORAGE_BASE + EDITIONS_BASE + "edition-$edition.json"
         return json.decodeFromString<EditionResponse>(getText(url))
