@@ -27,21 +27,20 @@ import com.makrydensystems.news.ui.theme.StarBrookType
  * (edition-morning.json + edition-evening.json, 15 stories each):
  * - Top Stories -> the whole edition, unfiltered (the website's topSection
  *   is the top of the page, not a story filter).
- * - Markets -> the edition's Markets section (its story carries
+ * - Business -> the edition's Business section (its story carries
  *   section "business") + the atAGlance.markets strip ("S&P 500 7,324
  *   -0.2% · Dow 50,198 -1.1% · Nasdaq 24,430 +0.4%"). The strip itself is
- *   another agent's content work; this drawer owns navigation TO Markets.
+ *   another agent's content work; this drawer owns navigation TO Business.
  * - Weather -> the Weather screen (NWS, per-ZIP).
  * - Video -> the daily videos list from the briefing manifest (8 videos
  *   live 2026-11-19: 5 morning/evening briefings + 3 breaking flashes).
  * - Oklahoma -> section "local"; Culture -> "culture"; Sports -> "sports";
- *   Business -> "business"; Tech -> "tech"; Faith -> "faith";
- *   Science -> "science".
+ *   Tech -> "tech"; Faith -> "faith"; Science -> "science".
  * - The drawer deliberately does NOT list Entertainment / Gaming / Fashion
  *   (live edition sections, but not in the website drawer) or Saved.
- * - Markets and Business both resolve to story-section "business" because
- *   the live editions carry exactly ONE business story, and it sits in
- *   the Markets section. That is the real data, not a mapping bug.
+ * - Business was "Markets" until Build #26: the drawer carried both a
+ *   MARKETS row and a STORIES "Business" row resolving to the same
+ *   "business" stories, so the rename merged them into the one row below.
  */
 enum class DrawerSectionKind {
     /** Whole edition, no filter (Top Stories). */
@@ -50,7 +49,7 @@ enum class DrawerSectionKind {
     /** Filter Home to one edition section's stories. */
     STORIES,
 
-    /** Markets view: the Markets section's stories + markets strip. */
+    /** Business view: the Business section's stories + markets strip. */
     MARKETS,
 
     /** Show the full daily videos list on Home. */
@@ -69,13 +68,12 @@ data class DrawerSection(
 
 val DRAWER_SECTIONS: List<DrawerSection> = listOf(
     DrawerSection("Top Stories", DrawerSectionKind.ALL),
-    DrawerSection("Markets", DrawerSectionKind.MARKETS, "business"),
+    DrawerSection("Business", DrawerSectionKind.MARKETS, "business"),
     DrawerSection("Weather", DrawerSectionKind.WEATHER),
     DrawerSection("Video", DrawerSectionKind.VIDEO),
     DrawerSection("Oklahoma", DrawerSectionKind.STORIES, "local"),
     DrawerSection("Culture", DrawerSectionKind.STORIES, "culture"),
     DrawerSection("Sports", DrawerSectionKind.STORIES, "sports"),
-    DrawerSection("Business", DrawerSectionKind.STORIES, "business"),
     DrawerSection("Tech", DrawerSectionKind.STORIES, "tech"),
     DrawerSection("Faith", DrawerSectionKind.STORIES, "faith"),
     DrawerSection("Science", DrawerSectionKind.STORIES, "science"),
