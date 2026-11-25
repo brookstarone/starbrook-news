@@ -118,6 +118,14 @@ private fun StarBrookApp(container: AppContainer, deepLinkRoute: MutableStateFlo
     LaunchedEffect(Unit) {
         NotificationChannels.createChannels(appContext)
         container.fcmRegistrar.ensureRegistered()
+        // R-44 (2026-11-25): restore the portal session on cold start,
+        // not only when the Hub opens — a non-remembered session must
+        // not survive a restart looking signed in until the user opens
+        // the Hub. Best-effort like the FCM registration above: a
+        // failure never blocks the UI, and the next Hub open retries.
+        // A remembered session is untouched — restoreSession only
+        // clears on non-remembered / rejected refresh.
+        runCatching { container.portalAuth.restoreSession() }
     }
     // In-app updater (Build #25): check on launch, then once a day
     // while the app stays open. The dialog below carries the visible

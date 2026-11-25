@@ -30,6 +30,18 @@ import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
 
 /**
+ * R-39 (2026-11-25): the strip's age — a live relative time from
+ * detectedAt when the row carries it, so hour 5 no longer reads
+ * "34m ago". Falls back to the server's display string when
+ * detectedAt is unknown (old cache rows), and to null when neither
+ * exists. Pure (no Android) so unit tests can cover it directly.
+ */
+internal fun breakingAgeText(breaking: Breaking, nowMillis: Long = System.currentTimeMillis()): String? {
+    if (breaking.detectedAtMs > 0) return formatRelativeTime(breaking.detectedAtMs, nowMillis)
+    return breaking.age?.takeIf { it.isNotBlank() }
+}
+
+/**
  * The breaking strip. It renders ONLY when [breaking] is non-null —
  * when nothing qualifies, the strip is gone entirely (no empty red
  * bar, no "no breaking news" text), exactly like the web: the strip
@@ -80,7 +92,7 @@ fun BreakingStrip(
                     )
                     val meta = buildList {
                         add(breaking.source)
-                        if (!breaking.age.isNullOrBlank()) add(breaking.age)
+                        breakingAgeText(breaking)?.let { add(it) }
                         if (breaking.outletCount > 1) add("${breaking.outletCount} outlets")
                     }.joinToString(" · ")
                     Text(

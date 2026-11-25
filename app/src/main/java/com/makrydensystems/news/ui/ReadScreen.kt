@@ -185,8 +185,8 @@ private class ReadViewModel(
         val articleUrl = parsed.articleUrl
 
         val cached = runCatching {
-            val morning = runCatching { repo.editionsFlow("morning").first() }.getOrNull().orEmpty()
-            val evening = runCatching { repo.editionsFlow("evening").first() }.getOrNull().orEmpty()
+            val morning = runCatching { repo.editionsFlow("morning").first().stories }.getOrNull().orEmpty()
+            val evening = runCatching { repo.editionsFlow("evening").first().stories }.getOrNull().orEmpty()
             (morning + evening).firstOrNull { story ->
                 story.link == link ||
                     (articleUrl != null &&

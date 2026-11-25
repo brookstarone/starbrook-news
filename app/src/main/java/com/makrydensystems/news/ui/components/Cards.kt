@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.makrydensystems.news.data.model.BriefingVideo
 import com.makrydensystems.news.data.model.Story
+import com.makrydensystems.news.data.model.isBusinessVideo
 import com.makrydensystems.news.ui.theme.StarBrookColors
 import com.makrydensystems.news.ui.theme.StarBrookShapes
 import com.makrydensystems.news.ui.theme.StarBrookType
@@ -368,8 +369,13 @@ fun FeaturedCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // R-41: a missing timestamp renders no time element —
+                // never "Source · ~2920w ago". The source alone stands.
+                val time = formatRelativeTime(story.published)
+                val meta = listOf(story.source, time)
+                    .filter { it.isNotBlank() }.joinToString(" · ")
                 Text(
-                    text = "${story.source} · ${formatRelativeTime(story.published)}",
+                    text = meta,
                     style = StarBrookType.caption,
                     color = StarBrookColors.textSecondary,
                     maxLines = 1,
@@ -503,6 +509,38 @@ private fun PlayBadge(modifier: Modifier = Modifier) {
 }
 
 /**
+ * R-42 (2026-11-25): video display names in one place. Daily
+ * briefings are named by edition ("Morning briefing" / "Evening
+ * briefing"); business editions likewise ("Midday business report" /
+ * "Market close") instead of the raw "business-midday briefing"
+ * slug. Breaking flashes keep the manifest title — that branch is
+ * untouched. Pure (no Android) so unit tests can cover it directly.
+ */
+internal fun videoDisplayTitle(video: BriefingVideo): String {
+    if (video.isBreaking) return video.title
+    return when {
+        video.edition.equals("morning", ignoreCase = true) -> "Morning briefing"
+        video.edition.equals("evening", ignoreCase = true) -> "Evening briefing"
+        video.edition.equals("business-midday", ignoreCase = true) -> "Midday business report"
+        video.edition.equals("business-close", ignoreCase = true) -> "Market close"
+        else -> video.title
+    }
+}
+
+/** Caption under the title: runtime + date for named briefings
+ * (daily + business); the manifest title's edition slug + date for
+ * anything else — and for breaking flashes, whose title stays raw. */
+internal fun videoDisplayCaption(video: BriefingVideo): String {
+    if (video.isBreaking) return "${video.edition} briefing · ${video.date}"
+    return when {
+        video.edition.equals("morning", ignoreCase = true) ||
+            video.edition.equals("evening", ignoreCase = true) ||
+            video.isBusinessVideo -> "${video.duration} · ${video.date}"
+        else -> "${video.edition} briefing · ${video.date}"
+    }
+}
+
+/**
  * A daily briefing video. Poster 16:9 with a gold play badge and a
  * duration chip that never overlaps the title. Breaking flashes get
  * the live-red treatment on the chip. Tapping opens the native
@@ -582,30 +620,18 @@ fun VideoCard(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                // Daily briefings are named by edition ("Morning
-                // briefing" / "Evening briefing") with the runtime on
-                // the card; breaking flashes and anything else keep the
-                // manifest title + edition caption.
-                val isDailyBriefing = !video.isBreaking &&
-                    (video.edition.equals("morning", ignoreCase = true) ||
-                        video.edition.equals("evening", ignoreCase = true))
+                // Daily + business briefings are named by edition
+                // (videoDisplayTitle); breaking flashes and anything
+                // else keep the manifest title + edition caption.
                 Text(
-                    text = if (isDailyBriefing) {
-                        video.edition.replaceFirstChar { it.uppercaseChar() } + " briefing"
-                    } else {
-                        video.title
-                    },
+                    text = videoDisplayTitle(video),
                     style = StarBrookType.title,
                     color = StarBrookColors.textPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = if (isDailyBriefing) {
-                        "${video.duration} · ${video.date}"
-                    } else {
-                        "${video.edition} briefing · ${video.date}"
-                    },
+                    text = videoDisplayCaption(video),
                     style = StarBrookType.caption,
                     color = StarBrookColors.textSecondary,
                     maxLines = 1,

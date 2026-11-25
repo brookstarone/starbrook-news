@@ -6,13 +6,11 @@ import com.makrydensystems.news.data.model.Breaking
 import com.makrydensystems.news.data.model.LiveItem
 import com.makrydensystems.news.data.model.SavedStoryEntity
 import com.makrydensystems.news.data.model.Story
-import com.makrydensystems.news.data.di.PushModule
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -38,11 +36,12 @@ private const val NEWS_USER_AGENT = "StarBrookNews/1.0 (Android)"
 private const val BREAKING_FRESH_MS = 6L * 60 * 60 * 1000 // web rule: 6 hours from detectedAt
 private const val LATEST_FRESH_MS = 2L * 60 * 60 * 1000 // web rule: 2 hours from builtAt
 private const val EDITION_STALE_MS = 18L * 60 * 60 * 1000 // an edition file older than this counts as "not built yet" for its slot (see isCurrentEdition)
-// Notification-toggle polling (PushModule): re-check intervals while the
-// Home flow is collected (app open on News). OFF suspends the loop on
-// the gate — zero network until the toggle comes back ON.
+// Background refresh intervals while a Home flow is collected (app
+// open on News). R-20 (2026-11-25): these loops run regardless of the
+// notification toggles — the toggles drive FCM registration only.
 private const val BREAKING_POLL_MS = 5L * 60 * 1000 // breaking.json every 5 min
 private const val EDITION_POLL_MS = 15L * 60 * 1000 // edition file every 15 min
+private const val LIVE_POLL_MS = 5L * 60 * 1000 // latest.json (Live Now) every 5 min
 
 // Supabase REST + functions bases (Wave 2). These name the same project
 // host as StarBrookApi's storage base; Api.kt is owned by another
@@ -55,7 +54,12 @@ private const val STORY_BODY_EXTRACT_URL =
 private const val ORIGINAL_READ_BASE = "https://makrydensystems.com/news/read?original="
 
 interface NewsRepository {
-    fun editionsFlow(edition: String): Flow<List<Story>> // "morning" | "evening"
+    // R-20 (2026-11-25): an edition load carries WHICH file the stories
+    // actually came from — the requested edition, the other edition, or
+    // latest.json — so Home can label a fallback render instead of
+    // silently caching another edition's stories under the requested
+    // key. [sourceEdition] is "morning" | "evening" | "latest".
+    fun editionsFlow(edition: String): Flow<EditionLoad> // "morning" | "evening"
     fun breakingFlow(): Flow<Breaking?>
     fun liveNowFlow(): Flow<List<LiveItem>>
     fun videosFlow(): Flow<List<BriefingVideo>>
@@ -88,6 +92,12 @@ interface NewsRepository {
     /** Full article body via the story-body-extract function (public, no auth). */
     suspend fun extractBody(articleUrl: String): ExtractResult
 }
+
+/** One edition load: the stories Home shows plus which file they actually came from (see [NewsRepository.editionsFlow]). */
+data class EditionLoad(
+    val stories: List<Story>,
+    val sourceEdition: String,
+)
 
 /** Business section data: the at-a-glance ticker line plus the edition's Business stories.
  * [sectionName] is the display name straight from the edition JSON's section entry
@@ -244,11 +254,11 @@ private data class ManifestVideo(
 class NewsRepositoryImpl(
     private val client: OkHttpClient,
     private val db: AppDatabase,
-    // Notification toggles (SettingsStore, DataStore-backed). Nullable so
-    // v1 still compiles before AppContainer passes it in — until then the
-    // PushModule in-memory gates (mirrored from the store by
-    // SettingsScreen) are the fallback. Either way the gate defaults
-    // match the store: breaking on, morning/evening off.
+    // Notification toggles (SettingsStore, DataStore-backed). R-20
+    // (2026-11-25): the in-app polling loops no longer read these —
+    // the toggles drive FCM registration only, and background refresh
+    // runs whenever a flow is collected. Kept (nullable) so
+    // AppContainer's construction is unchanged.
     private val settings: SettingsStore? = null,
     // Supabase anon key for PostgREST (Originals + short codes). Nullable
     // so the app compiles and runs before the key is wired (BuildConfig
@@ -279,15 +289,23 @@ class NewsRepositoryImpl(
     // failed refresh with an EMPTY cache throws IOException so the UI can
     // show ErrorState + retry. Nothing here ever returns fake data.
 
-    override fun editionsFlow(edition: String): Flow<List<Story>> = flow {
+    // Last known actual source per requested edition (R-20): set by
+    // every refreshEdition, read by editionsFlow for the cache-first
+    // emit. In-memory only, touched on Dispatchers.IO only (flows use
+    // flowOn(IO); refreshAll runs withContext(IO)). A cold start has
+    // no entry, so the first render labels nothing until the refresh
+    // lands — the label then appears with the real source.
+    private val editionSources = mutableMapOf<String, String>()
+
+    override fun editionsFlow(edition: String): Flow<EditionLoad> = flow {
         val cached = db.cachedStoryDao().storiesForEdition(edition)
-        var lastEmitted = cached
-        if (cached.isNotEmpty()) emit(cached)
+        var lastEmitted = EditionLoad(cached, editionSources[edition] ?: edition)
+        if (cached.isNotEmpty()) emit(lastEmitted)
         try {
             refreshEdition(edition)
             val fresh = db.cachedStoryDao().storiesForEdition(edition)
-            lastEmitted = fresh
-            emit(fresh)
+            lastEmitted = EditionLoad(fresh, editionSources[edition] ?: edition)
+            emit(lastEmitted)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (cached.isEmpty()) {
@@ -298,27 +316,22 @@ class NewsRepositoryImpl(
             }
             // Warm cache: keep showing it; the next collect / refreshAll retries.
         }
-        // Notification toggle: while this edition's toggle is ON, re-check
-        // its file every EDITION_POLL_MS for as long as the flow is
-        // collected (Home open). The pipeline builds at ~07:00 (morning)
-        // and ~16:00 (evening) Chicago time, so a new edition surfaces
-        // within one poll after it lands — no reopen needed. OFF suspends
-        // on the gate (zero network) until the toggle comes back ON.
-        // Emits only when the story list actually changed.
-        val enabled = editionNotifyFlow(edition)
+        // R-20 (2026-11-25): background refresh is decoupled from the
+        // notification opt-in — the toggles drive FCM registration
+        // only. While this flow is collected (Home open) the edition
+        // file is re-checked every EDITION_POLL_MS whether the edition
+        // toggle is on or off, so a new edition surfaces within one
+        // poll after it lands — no reopen needed. Emits only when the
+        // load actually changed.
         while (currentCoroutineContext().isActive) {
-            if (!enabled.first()) {
-                enabled.first { it }
-                continue
-            }
             delay(EDITION_POLL_MS)
-            if (!enabled.first()) continue
             try {
                 refreshEdition(edition)
                 val fresh = db.cachedStoryDao().storiesForEdition(edition)
-                if (fresh != lastEmitted) {
-                    lastEmitted = fresh
-                    emit(fresh)
+                val load = EditionLoad(fresh, editionSources[edition] ?: edition)
+                if (load != lastEmitted) {
+                    lastEmitted = load
+                    emit(load)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -338,20 +351,13 @@ class NewsRepositoryImpl(
             // Breaking null is a valid state (strip hidden); a failed refresh
             // just keeps whatever the cache had. Never an error surface here.
         }
-        // Notification toggle: while Breaking is ON, re-check breaking.json
-        // every BREAKING_POLL_MS for as long as the flow is collected
-        // (Home open) — a new breaking item surfaces in the strip.
-        // OFF suspends on the gate (zero network) until it comes back ON.
-        // Breaking is a data class, so an unchanged re-emit is conflated
-        // downstream and the strip does not flicker.
-        val enabled = settings?.notifyBreakingFlow ?: PushModule.breakingEnabled
+        // R-20 (2026-11-25): decoupled from the Breaking toggle (see
+        // editionsFlow) — re-check breaking.json every BREAKING_POLL_MS
+        // for as long as the flow is collected (Home open), whether the
+        // toggle is on or off. Breaking is a data class, so an unchanged
+        // re-emit is conflated downstream and the strip does not flicker.
         while (currentCoroutineContext().isActive) {
-            if (!enabled.first()) {
-                enabled.first { it }
-                continue
-            }
             delay(BREAKING_POLL_MS)
-            if (!enabled.first()) continue
             try {
                 emit(refreshBreaking())
             } catch (e: CancellationException) {
@@ -364,16 +370,40 @@ class NewsRepositoryImpl(
 
     override fun liveNowFlow(): Flow<List<LiveItem>> = flow {
         val cached = db.liveItemDao().getAll()
+        var lastEmitted = cached
         if (cached.isNotEmpty()) emit(cached)
         try {
             refreshLive()
-            emit(db.liveItemDao().getAll())
+            val fresh = db.liveItemDao().getAll()
+            lastEmitted = fresh
+            emit(fresh)
         } catch (e: Exception) {
             if (cached.isEmpty()) {
                 throw IOException(
                     "Could not load live updates. Check your connection and try again.",
                     e,
                 )
+            }
+        }
+        // R-20 (2026-11-25): Live Now had no polling loop at all — it
+        // went stale while Home sat open. Re-check latest.json every
+        // LIVE_POLL_MS for as long as the flow is collected (Home open),
+        // regardless of any toggle (toggles drive FCM registration
+        // only). Emits only when the list actually changed.
+        while (currentCoroutineContext().isActive) {
+            delay(LIVE_POLL_MS)
+            try {
+                refreshLive()
+                val fresh = db.liveItemDao().getAll()
+                if (fresh != lastEmitted) {
+                    lastEmitted = fresh
+                    emit(fresh)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Failed poll with a warm cache: keep showing it; the
+                // next poll retries. Never an error surface here.
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -395,25 +425,14 @@ class NewsRepositoryImpl(
                 )
             }
         }
-        // Breaking poll (2026-11-23, Nvidia flash gap): the manifest is
-        // where breaking flashes land, but this flow used to fetch it
-        // exactly once — a flash posted while Home sat open never
-        // appeared until a manual pull-to-refresh, and the 5-min
-        // breaking.json poll never touched the videos list. So while the
-        // Breaking toggle is ON, re-fetch the manifest every
-        // BREAKING_POLL_MS for as long as the flow is collected (Home
-        // open) — a new flash surfaces within one poll, no reopen
-        // needed. OFF suspends on the gate (zero network) until it
-        // comes back ON, mirroring breakingFlow. Emits only when the
-        // list actually changed, so the screen never flickers.
-        val enabled = settings?.notifyBreakingFlow ?: PushModule.breakingEnabled
+        // R-20 (2026-11-25): decoupled from the Breaking toggle (see
+        // editionsFlow) — re-fetch the manifest every BREAKING_POLL_MS
+        // for as long as the flow is collected (Home open), whether the
+        // toggle is on or off, so a flash posted while Home sits open
+        // surfaces within one poll. Emits only when the list actually
+        // changed, so the screen never flickers.
         while (currentCoroutineContext().isActive) {
-            if (!enabled.first()) {
-                enabled.first { it }
-                continue
-            }
             delay(BREAKING_POLL_MS)
-            if (!enabled.first()) continue
             try {
                 refreshVideos()
                 val fresh = db.videoDao().getAll()
@@ -428,7 +447,7 @@ class NewsRepositoryImpl(
                 // next poll retries. Never an error surface here.
             }
         }
-    }.flowOn(Dispatchers.IO)
+    }.map { sortVideosForDisplay(it) }.flowOn(Dispatchers.IO)
 
     // --- Wave 2: Originals + Business + full-body read ---
 
@@ -742,7 +761,8 @@ class NewsRepositoryImpl(
      * + retry, which is the honest state then).
      */
     override suspend fun refreshEdition(edition: String) {
-        val stories = fetchEditionWithFallback(edition)
+        val (source, stories) = fetchEditionWithFallback(edition)
+        editionSources[edition] = source
         val dao = db.cachedStoryDao()
         dao.clearEdition(edition)
         dao.insertAll(stories.map { it.copy(edition = edition) })
@@ -773,25 +793,31 @@ class NewsRepositoryImpl(
     private fun isCurrentEdition(builtAtMs: Long?): Boolean =
         builtAtMs == null || System.currentTimeMillis() - builtAtMs <= EDITION_STALE_MS
 
-    private suspend fun fetchEditionWithFallback(edition: String): List<Story> {
+    /**
+     * The requested edition, the other edition, or latest.json — in
+     * that order. Returns WHICH source won alongside the stories (R-20:
+     * the cache is "what Home shows for this switcher position", and
+     * the UI labels the fallback).
+     */
+    private suspend fun fetchEditionWithFallback(edition: String): Pair<String, List<Story>> {
         val requested = runCatching { fetchEditionFile(edition) }.getOrNull()
         if (requested != null && requested.stories.isNotEmpty() &&
             isCurrentEdition(requested.builtAtMs)
         ) {
-            return requested.stories
+            return edition to requested.stories
         }
         val other = if (edition == "morning") "evening" else "morning"
         val fallback = runCatching { fetchEditionFile(other) }.getOrNull()
         if (fallback != null && fallback.stories.isNotEmpty() &&
             isCurrentEdition(fallback.builtAtMs)
         ) {
-            return fallback.stories
+            return other to fallback.stories
         }
         // Last resort: latest.json — the freshest stories the backend has.
         // No freshness gate here: as a fallback, slightly stale latest
         // stories still beat an error screen.
         val latest = runCatching { fetchLatestAsStories() }.getOrNull()
-        if (!latest.isNullOrEmpty()) return latest
+        if (!latest.isNullOrEmpty()) return "latest" to latest
         throw IOException(
             "Could not load the $edition edition. Check your connection and try again.",
         )
@@ -826,7 +852,9 @@ class NewsRepositoryImpl(
         val fresh = breaking != null && detectedAtMs != null &&
             System.currentTimeMillis() - detectedAtMs <= BREAKING_FRESH_MS
         dao.clear()
-        if (fresh) dao.insert(breaking!!)
+        // R-39: the row carries detectedAt so the strip can age live
+        // instead of freezing on the server's display string.
+        if (fresh) dao.insert(breaking!!.copy(detectedAtMs = detectedAtMs ?: 0L))
         return if (fresh) breaking else null
     }
 
@@ -846,7 +874,9 @@ class NewsRepositoryImpl(
     private suspend fun refreshVideos() {
         val url = StarBrookApi.STORAGE_BASE + "news-videos/news-briefing-manifest.json"
         val videos = json.decodeFromString<ManifestResponse>(getText(url)).videos
-            .map { it.toBriefingVideo() }
+            // R-40: the manifest position is the within-day order —
+            // every video of one day shares the date string.
+            .mapIndexed { index, video -> video.toBriefingVideo().copy(manifestIndex = index) }
         val dao = db.videoDao()
         dao.clearAll()
         dao.insertAll(videos)
@@ -887,12 +917,16 @@ class NewsRepositoryImpl(
     } catch (e: Exception) {
         null
     }
-
-    // Notification gate for one edition's toggle: the DataStore-backed
-    // SettingsStore flow when AppContainer passed it in, else the
-    // PushModule in-memory mirror (kept in sync by SettingsScreen).
-    private fun editionNotifyFlow(edition: String): Flow<Boolean> = when (edition) {
-        "evening" -> settings?.notifyEveningFlow ?: PushModule.eveningEnabled
-        else -> settings?.notifyMorningFlow ?: PushModule.morningEnabled
-    }
 }
+
+/**
+ * R-40 (2026-11-25): the display order for videos — newest date
+ * first, manifest order within a day. The DAO orders the same way;
+ * this in-memory sort is the backstop so the "newest" selection never
+ * depends on Room's row order alone. Pure (no Android) so unit tests
+ * can cover it directly.
+ */
+internal fun sortVideosForDisplay(videos: List<BriefingVideo>): List<BriefingVideo> =
+    videos.sortedWith(
+        compareByDescending<BriefingVideo> { it.date }.thenBy { it.manifestIndex },
+    )

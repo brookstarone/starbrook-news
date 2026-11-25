@@ -22,12 +22,18 @@ import com.makrydensystems.news.ui.theme.StarBrookType
  * ([MarketsData.sectionName]) — never hardcoded. Hidden entirely when
  * the edition carries neither (the repository emits null then), never
  * an empty card.
+ *
+ * R-22 (2026-11-25): [showStories] is false in the drawer-Business
+ * view — the filtered feed there already owns the business stories,
+ * so the section renders the ticker line only and the stories are
+ * never listed twice. On Top Stories it keeps stories + ticker.
  */
 @Composable
 fun MarketsSection(
     markets: MarketsData,
     onStoryClick: (Story) -> Unit,
     modifier: Modifier = Modifier,
+    showStories: Boolean = true,
 ) {
     Column(
         modifier = modifier,
@@ -57,8 +63,10 @@ fun MarketsSection(
                 }
             }
         }
-        markets.stories.forEach { story ->
-            NewsCard(story = story, onClick = { onStoryClick(story) }, outletCount = story.outletCount)
+        if (showStories) {
+            markets.stories.forEach { story ->
+                NewsCard(story = story, onClick = { onStoryClick(story) }, outletCount = story.outletCount)
+            }
         }
     }
 }

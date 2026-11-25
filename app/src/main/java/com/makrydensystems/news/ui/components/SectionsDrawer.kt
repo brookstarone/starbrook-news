@@ -77,6 +77,7 @@ val DRAWER_SECTIONS: List<DrawerSection> = listOf(
     DrawerSection("Business", DrawerSectionKind.MARKETS, "business"),
     DrawerSection("Weather", DrawerSectionKind.WEATHER),
     DrawerSection("Video", DrawerSectionKind.VIDEO),
+    DrawerSection("National", DrawerSectionKind.STORIES, "national"),
     DrawerSection("Oklahoma", DrawerSectionKind.STORIES, "local"),
     DrawerSection("Culture", DrawerSectionKind.STORIES, "culture"),
     DrawerSection("Sports", DrawerSectionKind.STORIES, "sports"),
@@ -114,7 +115,7 @@ fun SectionsDrawer(
                 drawerContentColor = StarBrookColors.textPrimary,
             ) {
                 // R-02 (2026-11-24): ModalDrawerSheet does not scroll its
-                // content on its own — with thirteen rows the bottom
+                // content on its own — with fourteen rows the bottom
                 // entries clip on short screens / large font scales, which
                 // would leave the new Entertainment / Gaming / Fashion
                 // rows unreachable. The scrollable Column is the

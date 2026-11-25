@@ -190,4 +190,9 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Unit tests (Fix 1 + Fix 2, 2026-11-24): plain JUnit 4 for the pure
+    // functions only — no Robolectric, no Android framework. CI runs
+    // :app:testDebugUnitTest (see .github/workflows/build.yml).
+    testImplementation("junit:junit:4.13.2")
 }

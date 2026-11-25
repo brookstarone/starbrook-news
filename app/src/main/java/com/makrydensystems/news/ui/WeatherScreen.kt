@@ -20,11 +20,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -71,12 +73,14 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.tan
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
@@ -85,6 +89,11 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+// R-46 (2026-11-25): periodic re-fetch while the Weather screen is
+// collected — the forecast refreshes on its own instead of going stale
+// while open. Silent (no indicator); pull-to-refresh is the visible one.
+private const val WEATHER_REFRESH_MS = 45L * 60 * 1000
 
 private sealed interface WeatherState {
     data object NeedZip : WeatherState
@@ -103,6 +112,11 @@ private sealed interface WeatherState {
         // flashing its "isn't available" state. False once the fresh
         // frames have arrived (even when that means zero frames).
         val radarLoading: Boolean = false,
+        // R-21 (2026-11-25): true when this Ready is the last good
+        // forecast kept on screen because the refresh failed (e.g. the
+        // geocode threw) — the UI says so instead of silently serving
+        // a stale forecast as fresh.
+        val stale: Boolean = false,
     ) : WeatherState
 }
 
@@ -117,6 +131,26 @@ private class WeatherViewModel(
     // the user back at the prompt to retype it.)
     private val retryTick = MutableStateFlow(0)
 
+    // Pull-to-refresh state (R-46): true from the pull until the load
+    // re-emits (Ready or Error). Guarded so a second pull / Try again
+    // while a refresh is already running is a no-op. The periodic
+    // re-fetch below bumps the tick directly — silent, no indicator.
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: kotlinx.coroutines.flow.StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    init {
+        // R-46: re-fetch every 45 min while this ViewModel lives (the
+        // Weather route is on the back stack). A tick while the screen
+        // is not collected is harmless — the load re-runs on the next
+        // collect, and a warm cache renders instantly with no skeleton
+        // (lastReady guard below), so the radar loop index survives.
+        viewModelScope.launch {
+            while (true) {
+                delay(WEATHER_REFRESH_MS)
+                retryTick.value += 1
+            }
+        }
+    }
     // Backstop (tap-test #5): the last Ready this load emitted, for the
     // ZIP it belongs to — recorded by the onEach before stateIn, so it is
     // always the Ready actually on screen. A reload of the SAME ZIP never
@@ -131,6 +165,9 @@ private class WeatherViewModel(
             if (zip.isNullOrBlank()) {
                 flowOf<WeatherState>(WeatherState.NeedZip)
             } else {
+                // R-21: tracks whether the fresh Ready already reached
+                // the screen — shared by the flow below and its catch.
+                var freshEmitted = false
                 flow {
                     // Never emit Loading over a Ready for this ZIP: the
                     // reload keeps rendering the last Ready while the
@@ -207,6 +244,7 @@ private class WeatherViewModel(
                             radarLoading = false,
                         ),
                     )
+                    freshEmitted = true
                     repo.storeWeather(
                         zip = zip,
                         placeName = loc.placeName,
@@ -239,19 +277,41 @@ private class WeatherViewModel(
                             ),
                         )
                     }
-                }.catch {
-                    emit(
-                        WeatherState.Error(
-                            "Couldn't load the weather for that ZIP — check the ZIP and your connection, then try again.",
-                        ),
-                    )
+                }.catch { e ->
+                    if (e is CancellationException) throw e
+                    // R-21 (2026-11-25): a geocode failure must not
+                    // destroy the forecast just rendered from a warm
+                    // cache. When the last Ready on screen belongs to
+                    // this ZIP, keep it visible with a "couldn't
+                    // refresh" note. Only a genuine first load (no
+                    // Ready for this ZIP — e.g. bad ZIP 00000, no
+                    // cache) shows the error state. When the fresh
+                    // load already emitted, a late failure (cache
+                    // store / alerts tail) emits nothing — the fresh
+                    // Ready stays on screen.
+                    val last = lastReady.value
+                    if (!freshEmitted && last != null && last.zip == zip) {
+                        emit(last.copy(stale = true))
+                    } else if (!freshEmitted) {
+                        emit(
+                            WeatherState.Error(
+                                "Couldn't load the weather for that ZIP — check the ZIP and your connection, then try again.",
+                            ),
+                        )
+                    }
                 }
             }
         }
             // Record the last Ready (see lastReady): onEach runs before
             // the value reaches stateIn, so by the time any later reload
             // starts, the guard above sees the Ready that is on screen.
-            .onEach { if (it is WeatherState.Ready) lastReady.value = it }
+            // A Ready or Error also ends a pull-to-refresh (R-46).
+            .onEach {
+                if (it is WeatherState.Ready) lastReady.value = it
+                if (it is WeatherState.Ready || it is WeatherState.Error) {
+                    _isRefreshing.value = false
+                }
+            }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), WeatherState.Loading)
 
     fun setZip(zip: String) {
@@ -260,6 +320,8 @@ private class WeatherViewModel(
 
     /** Retry the load for the stored ZIP. The ZIP is never cleared here. */
     fun retry() {
+        if (_isRefreshing.value) return
+        _isRefreshing.value = true
         retryTick.value += 1
     }
 
@@ -376,6 +438,7 @@ private const val OSM_TILE_USER_AGENT =
  * an OpenStreetMap base map, with a play/pause loop; the per-ZIP midday
  * video plays natively.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WeatherScreen(
     container: AppContainer,
@@ -390,11 +453,20 @@ fun WeatherScreen(
         },
     )
     val state by vm.state.collectAsState()
+    val isRefreshing by vm.isRefreshing.collectAsState()
     var zipInput by remember { mutableStateOf("") }
     var zipError by remember { mutableStateOf<String?>(null) }
 
+    // R-46: pull-to-refresh on the Weather tab, wired to the same
+    // retry() the error state uses. The radar loop index survives a
+    // refresh (RadarView keeps it unkeyed — see there).
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = { vm.retry() },
+        modifier = modifier.fillMaxSize(),
+    ) {
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
@@ -485,6 +557,15 @@ fun WeatherScreen(
                     ) {
                         Text(text = "Change ZIP", style = StarBrookType.label, maxLines = 1)
                     }
+                }
+                // R-21: this forecast is the last good one — the refresh
+                // failed, so say so instead of passing it off as fresh.
+                if (s.stale) {
+                    Text(
+                        text = "Couldn't refresh — showing the last forecast for ${s.placeName}.",
+                        style = StarBrookType.bodySmall,
+                        color = StarBrookColors.textSecondary,
+                    )
                 }
                 // Current conditions hero card (mirrors the web weather
                 // card: big temp + condition, then a stats grid). NWS
@@ -726,6 +807,7 @@ fun WeatherScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
     }
 }
 
