@@ -5,9 +5,13 @@ import java.util.concurrent.TimeUnit
 /**
  * Relative time for story timestamps, matching the web's friendly
  * phrasing ("12m ago", "2h ago"). Epoch millis in, short string out.
- * Never returns an empty string; future timestamps read "just now".
+ * A missing timestamp (0 or negative — a saved story with no
+ * published value) has no honest age: "" so callers can omit the
+ * time element instead of rendering "~2920w ago" (R-41). Future
+ * timestamps read "just now".
  */
 internal fun formatRelativeTime(publishedMillis: Long, nowMillis: Long = System.currentTimeMillis()): String {
+    if (publishedMillis <= 0) return ""
     val diff = (nowMillis - publishedMillis).coerceAtLeast(0L)
     val minutes = TimeUnit.MILLISECONDS.toMinutes(diff)
     if (minutes < 1) return "just now"

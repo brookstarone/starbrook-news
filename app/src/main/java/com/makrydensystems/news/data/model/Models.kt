@@ -71,6 +71,13 @@ data class Breaking(
     @SerialName("a") val age: String? = null, // display string, e.g. "25 min ago"
     @SerialName("n") val outletCount: Int = 1, // trust mark
     @PrimaryKey @SerialName("u") val url: String, // read-page link
+    // R-39 (2026-11-25): when breaking.json detected this item (epoch
+    // ms), copied from the envelope's detectedAt by refreshBreaking.
+    // 0 = unknown (old cache rows / unparseable) — the strip then falls
+    // back to the server's frozen age string. NOT part of the breaking
+    // JSON object itself; the default keeps the decode safe. Room
+    // column too — the DB version bump in AppDatabase covers it.
+    val detectedAtMs: Long = 0L,
 )
 
 // ---------------------------------------------------------------------------
@@ -112,7 +119,18 @@ data class BriefingVideo(
     val duration: String, // "m:ss"
     val file: String,
     @SerialName("poster") val posterUrl: String?,
+    // R-40 (2026-11-25): position in the manifest (0 = newest), so
+    // videos sharing one date string order deterministically. Set by
+    // refreshVideos from the manifest order; NOT in the manifest JSON
+    // itself — the default keeps the decode safe. Room column too —
+    // the DB version bump in AppDatabase covers it.
+    val manifestIndex: Int = 0,
 )
+
+/** Business videos (midday + market close) carry an edition slug
+ * starting with "business" ("business-midday" / "business-close"). */
+val BriefingVideo.isBusinessVideo: Boolean
+    get() = edition.startsWith("business", ignoreCase = true)
 
 // ---------------------------------------------------------------------------
 // SavedStoryEntity — the Shelf (local Room only in v1, no login). Same

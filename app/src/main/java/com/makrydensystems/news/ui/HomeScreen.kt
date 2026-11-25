@@ -41,6 +41,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.makrydensystems.news.data.EditionLoad
 import com.makrydensystems.news.data.MarketsData
 import com.makrydensystems.news.data.NewsRepository
 import com.makrydensystems.news.data.SettingsStore
@@ -49,6 +50,7 @@ import com.makrydensystems.news.data.model.BriefingVideo
 import com.makrydensystems.news.data.model.Breaking
 import com.makrydensystems.news.data.model.LiveItem
 import com.makrydensystems.news.data.model.Story
+import com.makrydensystems.news.data.model.isBusinessVideo
 import com.makrydensystems.news.ui.components.BreakingStrip
 import com.makrydensystems.news.ui.components.DRAWER_SECTIONS
 import com.makrydensystems.news.ui.components.DrawerSection
@@ -76,6 +78,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -115,11 +118,26 @@ private class HomeViewModel(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    // The current edition load, shared: the stories list and the
+    // fallback label below both read it, and two collectors must not
+    // run two fetch/poll loops. R-20: the load carries which file the
+    // stories actually came from.
+    private val editionLoad: kotlinx.coroutines.flow.Flow<EditionLoad> =
+        refreshTick.flatMapLatest { edition.flatMapLatest { repo.editionsFlow(it) } }
+            .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    // Which file the displayed stories actually came from ("morning" |
+    // "evening" | "latest"), or null before the first load. Home labels
+    // a fallback render from this (R-20).
+    val editionSource: StateFlow<String?> = editionLoad
+        .map { it.sourceEdition }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     val stories: StateFlow<FeedState<List<Story>>> = combine(
-        refreshTick.flatMapLatest { edition.flatMapLatest { repo.editionsFlow(it) } },
+        editionLoad,
         settings.sectionsFlow,
         selectedSection,
-    ) { list, enabled, selected ->
+    ) { load, enabled, selected ->
             // R-02 (2026-11-24): SettingsStore.ALL_SECTIONS now holds all
             // eleven live sections, so the prefs filter alone no longer
             // drops Sports / Faith / Science / Entertainment / Gaming /
@@ -132,7 +150,7 @@ private class HomeViewModel(
                 (selected.kind == DrawerSectionKind.STORIES ||
                     selected.kind == DrawerSectionKind.MARKETS)
             ) selected.storySection else null
-            list.filter { story ->
+            load.stories.filter { story ->
                 val section = story.section.lowercase()
                 section in enabled || (active != null && section == active)
             }
@@ -156,15 +174,19 @@ private class HomeViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FeedState.Loading)
 
     // Breaking flash, top of Home (2026-11-23, Nvidia gap): the manifest
-    // lists newest first, so the first entry is the newest content. When
-    // that entry is a breaking flash it gets a prominent card at the top
-    // of Home — independent of breaking.json, which clears within hours
-    // and left the flash buried at the bottom of the list. Once a newer
-    // briefing lands, the flash drops back to the list below.
+    // lists newest first, so the first entry is usually the newest
+    // content. When that entry is a breaking flash it gets a prominent
+    // card at the top of Home — independent of breaking.json, which
+    // clears within hours and left the flash buried at the bottom of
+    // the list. Once a newer briefing lands, the flash drops back to
+    // the list below. R-19 (2026-11-25): the flash is the newest
+    // BREAKING entry wherever it sits — after the 15:00 business-close
+    // video lands, the 11:47 flash is second, not first, and must
+    // still get its card.
     val topBreakingVideo: StateFlow<BriefingVideo?> = videos
         .map { state ->
             if (state is FeedState.Data) {
-                state.value.firstOrNull()?.takeIf { it.isBreaking }
+                newestBreakingVideo(state.value)
             } else {
                 null
             }
@@ -174,13 +196,15 @@ private class HomeViewModel(
     // "New breaking video" update prompt: the newest breaking video the
     // user has not seen yet (seen = tapped to play, persisted in
     // DataStore). Null when there is nothing new — the banner never
-    // re-prompts for a video already watched.
+    // re-prompts for a video already watched. R-19: same newest-
+    // breaking selection as the top card — a flash behind a newer
+    // briefing still prompts while it is unseen.
     val newBreakingVideo: StateFlow<BriefingVideo?> = combine(
         videos,
         settings.lastSeenBreakingVideoIdFlow,
     ) { state, seenId ->
         if (state is FeedState.Data) {
-            state.value.firstOrNull()?.takeIf { it.isBreaking && it.id != seenId }
+            newestUnseenBreakingVideo(state.value, seenId)
         } else {
             null
         }
@@ -253,6 +277,7 @@ fun HomeScreen(
         },
     )
     val edition by vm.edition.collectAsState()
+    val editionSource by vm.editionSource.collectAsState()
     val storiesState by vm.stories.collectAsState()
     val breaking by vm.breaking.collectAsState()
     val liveState by vm.liveNow.collectAsState()
@@ -431,9 +456,9 @@ fun HomeScreen(
                 onClick = { breaking?.let { onBreakingClick(it) } },
             )
         }
-        // TOP BREAKING VIDEO CARD (same gap): when the manifest's newest
-        // entry is a breaking flash it sits here as a full card —
-        // independent of breaking.json, which clears within hours.
+        // TOP BREAKING VIDEO CARD (same gap): when the newest breaking
+        // video is a flash it sits here as a full card — independent
+        // of breaking.json, which clears within hours.
         topBreakingVideo?.let { video ->
             item {
                 VideoCard(video = video, onClick = { handleVideoClick(video) })
@@ -457,10 +482,22 @@ fun HomeScreen(
             else -> { /* Loading / Error: no ticker; Live now shows its own state. */ }
         }
         item {
-            EditionSwitcher(
-                edition = edition,
-                onSelect = { vm.setEdition(it) },
-            )
+            // R-20: when the stories on screen came from a fallback
+            // file, say so under the switcher — inside this same item,
+            // so the videoHeaderIndex math below is untouched.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                EditionSwitcher(
+                    edition = edition,
+                    onSelect = { vm.setEdition(it) },
+                )
+                editionFallbackNote(edition, editionSource)?.let { note ->
+                    Text(
+                        text = note,
+                        style = StarBrookType.bodySmall,
+                        color = StarBrookColors.textSecondary,
+                    )
+                }
+            }
         }
         when (val state = storiesState) {
             is FeedState.Loading -> item { SkeletonList(count = 5) }
@@ -571,25 +608,27 @@ fun HomeScreen(
             is FeedState.Data -> {
                 // Drawer "Video" shows the whole daily list (briefings +
                 // flashes — 8 live 2026-11-19); otherwise the home row
-                // shows the latest 3.
+                // shows the pinned set (R-45): latest morning + evening
+                // briefings first, then the newest flash + business
+                // video — never just the manifest's first 3.
                 val videos = if (selectedSection?.kind == DrawerSectionKind.VIDEO) {
                     state.value
                 } else {
-                    state.value.take(3)
+                    selectHomeVideos(state.value)
                 }
                 items(videos) { video ->
                     VideoCard(video = video, onClick = { handleVideoClick(video) })
                 }
             }
         }
-        // SECTIONS (Wave 2): Originals + Business. They render only on
-        // Top Stories (no drawer filter active — a filter means "only
-        // this section") and sit BELOW the video block on purpose:
-        // videoHeaderIndex above counts the items above "Video
-        // briefings", and anything inserted above it would shift the
-        // drawer scroll target. Originals come from PostgREST (empty
-        // until the anon key is wired — TODO.md §1); Business from the
-        // current edition's atAGlance + Business section.
+        // SECTIONS (Wave 2): Originals + Business. Originals render
+        // only on Top Stories (no drawer filter active — a filter means
+        // "only this section"). Business renders on Top Stories AND on
+        // the drawer-Business view (R-22): the drawer view used to hide
+        // the markets ticker from the very view that advertises it.
+        // They sit BELOW the video block on purpose: videoHeaderIndex
+        // above counts the items above "Video briefings", and anything
+        // inserted above it would shift the drawer scroll target.
         if (selectedSection == null) {
             when (val state = originalsState) {
                 is FeedState.Loading -> {}
@@ -604,15 +643,85 @@ fun HomeScreen(
                     }
                 }
             }
+        }
+        // R-22: in the drawer-Business view the filtered feed already
+        // owns the business stories — MarketsSection renders the ticker
+        // line only there, so the stories are never listed twice. On
+        // Top Stories it keeps its stories + ticker, as before.
+        if (selectedSection == null ||
+            selectedSection?.kind == DrawerSectionKind.MARKETS
+        ) {
             marketsData?.let { markets ->
                 item {
-                    MarketsSection(markets = markets, onStoryClick = onStoryClick)
+                    MarketsSection(
+                        markets = markets,
+                        onStoryClick = onStoryClick,
+                        showStories = selectedSection == null,
+                    )
                 }
             }
         }
         item { Spacer(modifier = Modifier.height(24.dp)) }
     }
     }
+    }
+}
+
+/**
+ * R-19 (2026-11-25): the newest breaking video in the manifest,
+ * wherever it sits — NOT only when it is first. After a newer
+ * briefing lands, the flash is second, not first, and must still get
+ * its top card and banner. Pure (no Android) so unit tests can cover
+ * it directly.
+ */
+internal fun newestBreakingVideo(videos: List<BriefingVideo>): BriefingVideo? =
+    videos.firstOrNull { it.isBreaking }
+
+/** The newest breaking video the user has not seen yet. The seen id
+ * is a single stored id (tapped to play); anything else counts as
+ * unseen — so the banner prompts for any unseen flash newer than the
+ * last one watched, not just when the manifest's first entry is a
+ * flash. A null seen id means nothing has been seen yet. */
+internal fun newestUnseenBreakingVideo(
+    videos: List<BriefingVideo>,
+    seenId: String?,
+): BriefingVideo? =
+    videos.firstOrNull { it.isBreaking && it.id != seenId }
+
+/**
+ * R-45 (2026-11-25): the Home video row — the latest morning +
+ * evening briefings pinned first, then the newest flash and the
+ * newest business video. The old take(3) pushed the morning briefing
+ * below the fold on a day with two flashes plus the midday business
+ * video. At most 4 entries, deduped by id. Pure (no Android) so unit
+ * tests can cover it directly.
+ */
+internal fun selectHomeVideos(videos: List<BriefingVideo>): List<BriefingVideo> {
+    val morning = videos.firstOrNull {
+        !it.isBreaking && it.edition.equals("morning", ignoreCase = true)
+    }
+    val evening = videos.firstOrNull {
+        !it.isBreaking && it.edition.equals("evening", ignoreCase = true)
+    }
+    val flash = videos.firstOrNull { it.isBreaking }
+    val business = videos.firstOrNull { it.isBusinessVideo }
+    return listOfNotNull(morning, evening, flash, business).distinctBy { it.id }
+}
+
+/**
+ * R-20 (2026-11-25): the fallback label for the edition switcher —
+ * null when the stories on screen are the requested edition (or the
+ * source is not known yet), else one plain sentence naming both.
+ * Pure (no Android) so unit tests can cover it directly.
+ */
+internal fun editionFallbackNote(requestedEdition: String, sourceEdition: String?): String? {
+    if (sourceEdition == null || sourceEdition == requestedEdition) return null
+    val requestedLabel = if (requestedEdition == "evening") "evening" else "morning"
+    return if (sourceEdition == "latest") {
+        "Showing the latest stories — the $requestedLabel edition isn't out yet."
+    } else {
+        val sourceLabel = if (sourceEdition == "evening") "evening" else "morning"
+        "Showing the $sourceLabel edition — the $requestedLabel edition isn't out yet."
     }
 }
 

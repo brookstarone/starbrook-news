@@ -95,7 +95,7 @@ private class SearchViewModel(private val repo: NewsRepository) : ViewModel() {
     private val editionStories: StateFlow<List<Story>> = refreshTick
         .flatMapLatest {
             combine(repo.editionsFlow("morning"), repo.editionsFlow("evening")) { morning, evening ->
-                (morning + evening).distinctBy { it.link }
+                (morning.stories + evening.stories).distinctBy { it.link }
             }.catch { emit(emptyList()) }
         }
         .onEach { liveLoadDone.value = true }

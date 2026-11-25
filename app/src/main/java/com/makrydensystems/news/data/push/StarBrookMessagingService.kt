@@ -65,7 +65,30 @@ class StarBrookMessagingService : FirebaseMessagingService() {
         val title = data["title"]?.takeIf { it.isNotBlank() } ?: "StarBrook News"
         val body = data["body"].orEmpty()
         val route = validRoute(data["route"])
-        showNotification(kind, title, body, route)
+        // R-43 (2026-11-25): the receive path used to notify for
+        // whatever kind arrived, ignoring the local toggles — a user
+        // who turned Morning off still got the morning push. Check the
+        // matching toggle and drop the notification when that kind is
+        // off. The DataStore read runs on the service scope; a read
+        // failure fails OPEN (show the notification) and never crashes
+        // the receive path. The server-side unregister stays the
+        // primary path — this is the local backstop for a stale row.
+        scope.launch {
+            val allowed = try {
+                val settings = SettingsStore(applicationContext)
+                shouldShowNotification(
+                    kind,
+                    breaking = settings.notifyBreakingFlow.first(),
+                    morning = settings.notifyMorningFlow.first(),
+                    evening = settings.notifyEveningFlow.first(),
+                    weather = settings.notifyWeatherFlow.first(),
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "toggle read failed; showing notification (fail open)", e)
+                true
+            }
+            if (allowed) showNotification(kind, title, body, route)
+        }
     }
 
     override fun onNewToken(token: String) {
@@ -138,4 +161,22 @@ class StarBrookMessagingService : FirebaseMessagingService() {
             else -> "news"
         }
     }
+}
+
+/**
+ * R-43 (2026-11-25): whether a push of [kind] may notify, given the
+ * four local toggles. Unknown kinds fall under breaking (the default
+ * kind). Pure (no Android) so unit tests can cover it directly.
+ */
+internal fun shouldShowNotification(
+    kind: String,
+    breaking: Boolean,
+    morning: Boolean,
+    evening: Boolean,
+    weather: Boolean,
+): Boolean = when (kind) {
+    "morning" -> morning
+    "evening" -> evening
+    "weather" -> weather
+    else -> breaking
 }

@@ -23,6 +23,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 
 // In-app updater (2026-11-23): the app is sideloaded — no Play Store —
 // so the app checks for its own updates. One small public JSON fetch
@@ -48,6 +49,11 @@ private const val APK_FILE_NAME = "starbrook-news-update.apk"
  * The server-side update manifest (public JSON in the news-videos
  * bucket — see APP_UPDATE_RELEASE.md for the shape + release step).
  * Defaults keep a half-written manifest from killing the decode.
+ * [sha256] is the lowercase hex SHA-256 of the exact APK bytes the
+ * release step uploaded (R-23): the downloader verifies the file
+ * against it before the installer opens, and fails closed on a
+ * mismatch. Empty = no hash published (old manifests) — the download
+ * is then checked by length only, as before.
  */
 @Serializable
 data class AppUpdateManifest(
@@ -56,6 +62,7 @@ data class AppUpdateManifest(
     val apkUrl: String = "",
     val releaseNotes: String = "",
     val mandatory: Boolean = false,
+    val sha256: String = "",
 )
 
 sealed interface AppUpdateState {
@@ -140,7 +147,7 @@ class AppUpdateChecker(
         }
         _state.value = AppUpdateState.Downloading(0f)
         try {
-            val file = withContext(Dispatchers.IO) { downloadApk(manifest.apkUrl) }
+            val file = withContext(Dispatchers.IO) { downloadApk(manifest) }
             _state.value = AppUpdateState.Downloaded(manifest, file)
             openInstaller(file)
         } catch (e: CancellationException) {
@@ -213,10 +220,16 @@ class AppUpdateChecker(
 
     /** Streams the APK to app-private cache storage with progress.
      * A truncated file fails here — a half-downloaded APK would fail
-     * the installer with a useless error instead. */
-    private fun downloadApk(apkUrl: String): File {
+     * the installer with a useless error instead. R-23: when the
+     * manifest publishes a SHA-256, the downloaded bytes are verified
+     * against it before the file is returned — a mismatch deletes the
+     * file and fails closed (the caller reports Failed, never Install).
+     * The debug signing key is public by design, so this hash is the
+     * only check that the bytes are the ones the release step shipped.
+     */
+    private fun downloadApk(manifest: AppUpdateManifest): File {
         val request = Request.Builder()
-            .url(apkUrl)
+            .url(manifest.apkUrl)
             .header("User-Agent", "StarBrookNews/1.0 (Android)")
             .build()
         client.newCall(request).execute().use { response ->
@@ -242,7 +255,54 @@ class AppUpdateChecker(
                 }
             }
             if (total > 0 && file.length() != total) throw IOException("Truncated download")
+            if (!verifyApkSha256(file, manifest.sha256)) {
+                file.delete()
+                throw IOException("Downloaded APK failed the SHA-256 check")
+            }
             return file
         }
     }
+}
+
+/**
+ * R-23 (2026-11-25): SHA-256 helpers for the updater. The file is
+ * streamed, never read whole into memory. Pure (no Android) except
+ * for the File read itself, so unit tests cover the byte-level logic
+ * via [sha256Hex] / [sha256Matches] directly.
+ */
+
+/** Lowercase hex SHA-256 of [bytes]. */
+internal fun sha256Hex(bytes: ByteArray): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+    return digest.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+}
+
+/**
+ * Whether [bytes] match the manifest's published hash. Empty means
+ * no hash was published (old manifests) — nothing to check. A
+ * malformed value never matches: fail closed.
+ */
+internal fun sha256Matches(bytes: ByteArray, expectedHex: String): Boolean {
+    val expected = expectedHex.trim().lowercase()
+    if (expected.isEmpty()) return true
+    if (!expected.matches(Regex("[0-9a-f]{64}"))) return false
+    return sha256Hex(bytes) == expected
+}
+
+/** Streaming SHA-256 check of a downloaded APK file against the manifest hash. */
+internal fun verifyApkSha256(file: File, expectedHex: String): Boolean {
+    val expected = expectedHex.trim().lowercase()
+    if (expected.isEmpty()) return true
+    if (!expected.matches(Regex("[0-9a-f]{64}"))) return false
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(8192)
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    val actual = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+    return actual == expected
 }

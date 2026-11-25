@@ -29,8 +29,11 @@ import kotlinx.coroutines.flow.Flow
         SavedStoryEntity::class, // saved_stories (Shelf, local only in v1)
     ],
     // v2 (Wave 2): Story gains the outletCount column (edition JSON "n").
-    // Destructive migration wipes the refetchable cache on upgrade.
-    version = 2,
+    // v3 (reliability sweep 2026-11-25): Breaking gains detectedAtMs
+    // (R-39, live relative age) and BriefingVideo gains manifestIndex
+    // (R-40, deterministic within-day order). Destructive migration
+    // wipes the refetchable cache on upgrade.
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -96,7 +99,10 @@ interface LiveItemDao {
 
 @Dao
 interface VideoDao {
-    @Query("SELECT * FROM videos ORDER BY date DESC")
+    // R-40 (2026-11-25): date alone does not order one day's videos
+    // (they share the date string) — manifestIndex breaks the tie in
+    // manifest order (0 = newest).
+    @Query("SELECT * FROM videos ORDER BY date DESC, manifestIndex ASC")
     suspend fun getAll(): List<BriefingVideo>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
