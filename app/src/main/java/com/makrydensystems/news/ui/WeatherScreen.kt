@@ -126,7 +126,7 @@ private class WeatherViewModel(
 ) : ViewModel() {
     // Retry trigger: the load below only re-runs when the ZIP flow emits,
     // so a bare retry would do nothing. Bumping this tick re-emits the
-    // SAME stored ZIP — the retry re-fetches without touching the ZIP.
+    // SAME effective ZIP — the retry re-fetches without touching the ZIP.
     // (The old retry called clearZip(), which wiped the ZIP and dumped
     // the user back at the prompt to retype it.)
     private val retryTick = MutableStateFlow(0)
@@ -161,7 +161,7 @@ private class WeatherViewModel(
     private val lastReady = MutableStateFlow<WeatherState.Ready?>(null)
 
     val state: kotlinx.coroutines.flow.StateFlow<WeatherState> =
-        combine(settings.zipFlow, retryTick) { zip, _ -> zip }.flatMapLatest { zip ->
+        combine(settings.effectiveZipFlow, retryTick) { zip, _ -> zip }.flatMapLatest { zip ->
             if (zip.isNullOrBlank()) {
                 flowOf<WeatherState>(WeatherState.NeedZip)
             } else {

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -100,6 +101,18 @@ class SettingsStore(context: Context) {
             )
         }
     }
+
+    // ZIP must not show when signed out (2026-11-24): the stored ZIP is
+    // a home ZIP the user entered, and signed-out the app behaves as if
+    // no ZIP exists — empty field / prompt in Settings, Weather and the
+    // Portal, no local content or weather video from it. The stored
+    // value is NOT deleted: signing back in restores it without
+    // re-entry. zipFlow stays as-is (FCM push registration reads the
+    // stored ZIP); only display/content consumers use this flow.
+    val effectiveZipFlow: Flow<String?> =
+        combine(zipFlow, portalSessionFlow) { zip, session ->
+            effectiveZip(zip, session != null)
+        }.distinctUntilChanged()
 
     // First-run coach mark over the Portal star: false until the user has
     // dismissed it once; then it never shows again.
@@ -320,6 +333,19 @@ class SettingsStore(context: Context) {
         // first read after upgrade — see migratedSections.
         val SECTIONS_ADDED_R02: Set<String> =
             setOf("sports", "faith", "science", "entertainment", "gaming", "fashion")
+        // The original five sections (pre-R-02); the sign-in merge in
+        // PortalRepository treats these differently from the six added
+        // by R-02 — see mergeNewsroomSections.
+        val SECTIONS_ORIGINAL_FIVE: Set<String> =
+            setOf("national", "local", "tech", "business", "culture")
+
+        /**
+         * The ZIP the app may show/use: the stored ZIP, but only while
+         * signed in. Signed out the app behaves as if no ZIP exists.
+         * Pure (no Android) so unit tests can cover it directly.
+         */
+        fun effectiveZip(storedZip: String?, signedIn: Boolean): String? =
+            if (signedIn) storedZip else null
     }
 }
 

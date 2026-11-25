@@ -168,6 +168,37 @@ class PortalRepository(
         }
     }
 
+    /**
+     * Sign-in prefs sync (2026-11-24): a server row written before R-02
+     * holds only the original five sections — applying it raw would
+     * switch the six new sections off locally (Hub chips showed 5 on
+     * while Settings showed 11). So sign-in MERGES the server row with
+     * the local migrated set ([mergeNewsroomSections]), applies the
+     * merged prefs locally, and pushes the merged set back to the server
+     * when it differs from the row — the two surfaces agree from then
+     * on. Returns the merged prefs, or null when there is no server row
+     * yet (Hub shows Subscribe; local prefs stay untouched). Other
+     * fields (subscribed/morning/evening/breaking) stay server-wins.
+     * Best-effort: a failed push is swallowed — local state is already
+     * correct and the next sign-in or Hub save converges the server.
+     */
+    suspend fun syncNewsroomPrefsOnSignIn(): NewsroomPrefs? = withContext(Dispatchers.IO) {
+        val server = loadNewsroomPrefs() ?: return@withContext null
+        val localSections = settings.sectionsFlow.first()
+        val mergedSections = mergeNewsroomSections(server.sections, localSections)
+        val preservedOutside = (server.sections ?: emptyList())
+            .filter { it !in SettingsStore.ALL_SECTIONS }
+        val merged = server.copy(
+            sections = encodeSectionsForPush(mergedSections, preservedOutside),
+        )
+        applyPrefsLocally(merged)
+        val serverSet = server.sections?.toSet() ?: SettingsStore.ALL_SECTIONS
+        if (mergedSections + preservedOutside.toSet() != serverSet) {
+            runCatching { saveNewsroomPrefs(merged) }
+        }
+        merged
+    }
+
     suspend fun applyPrefsLocally(prefs: NewsroomPrefs) {
         settings.setNewsSubscribed(prefs.subscribed)
         settings.setPrefMorning(prefs.morning)
@@ -437,6 +468,57 @@ class PortalRepository(
     }
 
     companion object {
+        /**
+         * Sign-in section merge (2026-11-24). O5 = the original five
+         * sections, A6 = the six R-02 added sections, S = server
+         * sections (null = all), L = local migrated sections.
+         * agreed = { s in O5 : (S == null || s in S) && s in L }
+         *        ∪ { s in A6 : s in L }
+         * For the old five, AND preserves a deliberate off-choice on
+         * EITHER side (a web off stays off; a local off stays off).
+         * For the new six, the server's absence is staleness, not a
+         * choice — the web portal never offered science / entertainment
+         * / gaming / fashion — so only the local choice counts. Known
+         * edge: a deliberate web off of sports/faith (the two new
+         * sections the web DID offer) is re-enabled once on sign-in;
+         * turning it off again in the app then sticks, since a local
+         * off is preserved by every future merge.
+         */
+        fun mergeNewsroomSections(
+            serverSections: List<String>?,
+            localSections: Set<String>,
+        ): Set<String> {
+            val server = serverSections?.toSet()
+            val agreedOld = SettingsStore.SECTIONS_ORIGINAL_FIVE.filter { section ->
+                (server == null || section in server) && section in localSections
+            }.toSet()
+            val agreedNew = SettingsStore.SECTIONS_ADDED_R02.filter { section ->
+                section in localSections
+            }.toSet()
+            return agreedOld + agreedNew
+        }
+
+        /**
+         * Encode merged sections for the server row: null means "all"
+         * (exactly like localNewsroomPrefs), but only when the merged
+         * set is the full eleven AND no outside-eleven ids need
+         * preserving — an explicit list keeps those ids. Order is
+         * deterministic: the app's eleven in ALL_SECTIONS order, then
+         * preserved ids in server order.
+         */
+        fun encodeSectionsForPush(
+            mergedSections: Set<String>,
+            preservedOutsideIds: List<String>,
+        ): List<String>? {
+            if (mergedSections == SettingsStore.ALL_SECTIONS &&
+                preservedOutsideIds.isEmpty()
+            ) {
+                return null
+            }
+            return SettingsStore.ALL_SECTIONS.filter { it in mergedSections } +
+                preservedOutsideIds.filter { it !in mergedSections }
+        }
+
         /** Canonical URL for url_hash: tracking params stripped
          * (utm_*, fbclid, gclid, mc_*, _ga), fragment dropped. */
         fun canonicalUrl(url: String): String {
