@@ -58,7 +58,7 @@ private class SettingsViewModel(private val store: SettingsStore) : ViewModel() 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "morning")
     val sections = store.sectionsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
-    val zip = store.zipFlow
+    val zip = store.effectiveZipFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val notifyBreaking = store.notifyBreakingFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
