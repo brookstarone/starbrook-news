@@ -343,7 +343,7 @@ private class PortalViewModel(private val container: AppContainer) : ViewModel()
         .map { it.size }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
-    val zip: StateFlow<String?> = store.zipFlow
+    val zip: StateFlow<String?> = store.effectiveZipFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val sections: StateFlow<Set<String>> = store.sectionsFlow
@@ -363,11 +363,15 @@ private class PortalViewModel(private val container: AppContainer) : ViewModel()
         _email.value = email
         _error.value = null
         _notice.value = null
-        // Pull the server prefs (they win over local when present), then
-        // converge the Shelf both ways.
-        runCatching { repo.loadNewsroomPrefs() }.getOrNull()?.let { server ->
-            repo.applyPrefsLocally(server)
-            _prefs.value = server
+        // Pull the server prefs and merge them with the local set, then
+        // converge the Shelf both ways. The MERGE (not the raw server
+        // row) wins: a stale server row that predates R-02 must not
+        // switch the six new sections off — see
+        // PortalRepository.syncNewsroomPrefsOnSignIn. Other fields
+        // (subscribed/morning/evening/breaking) stay server-wins.
+        // Null (no server row yet) leaves the local prefs in place.
+        runCatching { repo.syncNewsroomPrefsOnSignIn() }.getOrNull()?.let { merged ->
+            _prefs.value = merged
         }
         val synced = runCatching { repo.syncShelf() }.getOrDefault(false)
         _syncMessage.value = if (synced) {
