@@ -31,6 +31,7 @@ import coil.compose.AsyncImage
 import com.makrydensystems.news.data.ExtractResult
 import com.makrydensystems.news.data.NewsRepository
 import com.makrydensystems.news.data.di.AppContainer
+import com.makrydensystems.news.data.model.Breaking
 import com.makrydensystems.news.data.model.Story
 import com.makrydensystems.news.ui.components.EmptyState
 import com.makrydensystems.news.ui.components.ErrorState
@@ -130,6 +131,43 @@ private fun stripQuery(url: String): String =
 private fun sameArticleUrl(a: String, b: String): Boolean =
     a.isNotBlank() && b.isNotBlank() && stripQuery(a) == stripQuery(b)
 
+/**
+ * Breaking-reader fix (2026-11-25): a story shell for the LIVE
+ * breaking entry, when it is the story being read and it carries a
+ * real excerpt. breaking.json's `u` is a read-page link, so the match
+ * runs against the read link, the article URL inside it
+ * ([breakingArticleUrl], parsed by the caller with [parseReadLink]),
+ * and the title — the same three keys the edition cache uses.
+ * Returns null when the entry is a different story or its excerpt is
+ * blank: the caller then falls through to the honest Unavailable
+ * state. Pure (no Android) so unit tests can cover it directly.
+ */
+internal fun breakingReadStory(
+    breaking: Breaking?,
+    link: String,
+    title: String,
+    articleUrl: String?,
+    breakingArticleUrl: String?,
+): Story? {
+    if (breaking == null) return null
+    val excerpt = breaking.excerpt?.trim().orEmpty()
+    if (excerpt.isBlank()) return null
+    val matches = breaking.url == link ||
+        (articleUrl != null && (breaking.url == articleUrl || sameArticleUrl(breaking.url, articleUrl))) ||
+        (breakingArticleUrl != null && articleUrl != null && sameArticleUrl(breakingArticleUrl, articleUrl)) ||
+        (title.isNotBlank() && breaking.title.equals(title, ignoreCase = true))
+    if (!matches) return null
+    return Story(
+        title = breaking.title,
+        source = breaking.source,
+        excerpt = excerpt,
+        link = articleUrl ?: breakingArticleUrl ?: breaking.url,
+        published = 0L,
+        section = "national",
+        image = null,
+    )
+}
+
 private fun hostLabel(articleUrl: String): String =
     runCatching { Uri.parse(articleUrl).host }.getOrNull()
         ?.removePrefix("www.").orEmpty().ifBlank { "the source" }
@@ -168,13 +206,22 @@ private class ReadViewModel(
      *  2. Saved row (stored excerpt) — same matching.
      *  3. Original row (stored FULL body) for ?original= links, and
      *     /n/<code> short codes (their row carries the article URL).
-     *  4. Live story-body-extract call on the article URL — this is
+     *  4. Live breaking entry (stored excerpt) — a breaking-only
+     *     story lives in breaking.json, not in either edition, and a
+     *     video/paywalled lead then extracts as Unavailable with no
+     *     text at all. The entry is consulted only when steps 1–3
+     *     missed, so the extraction order for edition stories is
+     *     unchanged.
+     *  5. Live story-body-extract call on the article URL — this is
      *     what rescues breaking/live taps, whose URLs are usually NOT
      *     in today's editions (verified live 2026-11-19: the Al
      *     Jazeera breaking URL is in neither edition, title unmatched,
-     *     but extraction returns 2,439 chars).
-     *  5. Honest [ReadState.Unavailable] when extraction is blocked,
-     *     with the Read Original link — never a dead error.
+     *     but extraction returns 2,439 chars). When extraction fails
+     *     and step 4 found an excerpt, the story resolves to Found
+     *     with the excerpt shown instead of bare Unavailable.
+     *  6. Honest [ReadState.Unavailable] when extraction is blocked
+     *     and no stored text exists, with the Read Original link —
+     *     never a dead error.
      * `first()` on editionsFlow takes the warm cache emission when
      * there is one (instant standard); a cold cache waits for the
      * post-refresh emission. Home's own collection keeps the cache
@@ -233,6 +280,19 @@ private class ReadViewModel(
 
         val story = cached ?: saved ?: shortCodeStory
         val resolvedArticleUrl = articleUrl ?: shortCodeStory?.link
+        // Breaking-reader fix (2026-11-25): only when steps 1–3 missed.
+        // A fresh fetch, not the flow's first emission — the flow emits
+        // the Room cache first, which is null on a cold start, while
+        // refreshBreaking() returns the live entry (null when no story
+        // qualifies or detectedAt is stale, per the 6h web rule).
+        // A failure here is swallowed: the extraction branches below
+        // still run and land on the honest Unavailable state.
+        val breakingStory = if (story == null) {
+            runCatching { repo.refreshBreaking() }.getOrNull()
+                ?.let { b -> breakingReadStory(b, link, title, articleUrl, parseReadLink(b.url).articleUrl) }
+        } else {
+            null
+        }
         if (story != null && resolvedArticleUrl != null) {
             return when (val extracted = extract(resolvedArticleUrl)) {
                 is ExtractResult.Ok -> ReadState.Found(
@@ -257,16 +317,38 @@ private class ReadViewModel(
         if (resolvedArticleUrl != null) {
             return when (val extracted = extract(resolvedArticleUrl)) {
                 is ExtractResult.Ok -> ReadState.Found(
-                    story = synthesizedStory(resolvedArticleUrl, extracted.body),
+                    // The breaking entry's title/source are the real
+                    // ones; the extracted body is what renders.
+                    story = breakingStory ?: synthesizedStory(resolvedArticleUrl, extracted.body),
                     body = BodyState.Ready(paragraphsOf(extracted.body)),
                     articleUrl = resolvedArticleUrl,
                 )
-                is ExtractResult.Unavailable -> ReadState.Unavailable(
-                    title = title.ifBlank { hostLabel(resolvedArticleUrl) },
-                    articleUrl = resolvedArticleUrl,
-                    source = hostLabel(resolvedArticleUrl),
-                )
+                is ExtractResult.Unavailable -> if (breakingStory != null) {
+                    // Breaking-reader fix: the stored excerpt is shown
+                    // (Found + Unavailable renders it) instead of the
+                    // bare Unavailable state with no text at all.
+                    ReadState.Found(
+                        story = breakingStory,
+                        body = BodyState.Unavailable,
+                        articleUrl = resolvedArticleUrl,
+                    )
+                } else {
+                    ReadState.Unavailable(
+                        title = title.ifBlank { hostLabel(resolvedArticleUrl) },
+                        articleUrl = resolvedArticleUrl,
+                        source = hostLabel(resolvedArticleUrl),
+                    )
+                }
             }
+        }
+        if (breakingStory != null) {
+            // No article URL to extract from — the excerpt is the
+            // whole story (Found + None renders it).
+            return ReadState.Found(
+                story = breakingStory,
+                body = BodyState.None,
+                articleUrl = null,
+            )
         }
         return ReadState.Missing
     }
