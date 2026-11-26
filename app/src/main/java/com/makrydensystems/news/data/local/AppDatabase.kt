@@ -33,7 +33,9 @@ import kotlinx.coroutines.flow.Flow
     // (R-39, live relative age) and BriefingVideo gains manifestIndex
     // (R-40, deterministic within-day order). Destructive migration
     // wipes the refetchable cache on upgrade.
-    version = 3,
+    // v4 (breaking-reader fix 2026-11-25): Breaking gains excerpt
+    // ("e", the lead's feed excerpt for the reader).
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
