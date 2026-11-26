@@ -56,12 +56,15 @@ data class Story(
 )
 
 // ---------------------------------------------------------------------------
-// Breaking — breaking.json: {"breaking": null | {"t","s","a","n","u"},
+// Breaking — breaking.json: {"breaking": null | {"t","s","a","n","u","e"},
 // "detectedAt": ISO-8601}. Live file was null when verified (2026-11-19
 // ~12:55 CST); the compact keys are confirmed from the live web page JS
 // (news_mix.html renderBreaking/fetchLiveBreaking: b.t title, b.s source,
 // b.a age string, b.n outlet count, b.u read-page link) plus the 6-hour
 // freshness rule on detectedAt, which the repository mirrors.
+// "e" is the lead's verified feed excerpt (breaking-reader fix,
+// 2026-11-25) — the reader shows it when story-body-extract fails on
+// a breaking-only story instead of a bare Unavailable.
 // ---------------------------------------------------------------------------
 @Serializable
 @Entity(tableName = "breaking")
@@ -78,6 +81,13 @@ data class Breaking(
     // JSON object itself; the default keeps the decode safe. Room
     // column too — the DB version bump in AppDatabase covers it.
     val detectedAtMs: Long = 0L,
+    // Breaking-reader fix (2026-11-25): the lead's verified feed
+    // excerpt from breaking.json ("e"). The reader shows it when
+    // story-body-extract fails on a breaking-only story (video or
+    // paywalled lead) instead of a bare Unavailable. Null when the
+    // pipeline has no real excerpt — never a headline repeat. Room
+    // column too — the DB version bump in AppDatabase covers it.
+    @SerialName("e") val excerpt: String? = null,
 )
 
 // ---------------------------------------------------------------------------
