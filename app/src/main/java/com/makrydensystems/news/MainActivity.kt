@@ -1,10 +1,12 @@
 package com.makrydensystems.news
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -46,6 +48,7 @@ import com.makrydensystems.news.ui.components.StarBrookBottomNav
 import com.makrydensystems.news.ui.components.StarBrookRoutes
 import com.makrydensystems.news.ui.components.StarBrookTopBar
 import com.makrydensystems.news.ui.theme.StarBrookTheme
+import java.net.URLDecoder
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -97,6 +100,29 @@ private fun openPortal(navController: NavController, reason: String? = null) {
     }
 }
 
+/**
+ * Open an article URL from a push tap in a Custom Tab (in-app
+ * browser, with a close button back to StarBrook). Falls back to the
+ * plain browser when Custom Tabs is unavailable, and does nothing
+ * when no browser can open the URL at all — the tap never crashes
+ * the app. Never a WebView.
+ */
+private fun openWebUrl(context: Context, url: String) {
+    val uri = Uri.parse(url)
+    val launched = runCatching {
+        CustomTabsIntent.Builder().build().launchUrl(context, uri)
+    }.isSuccess
+    if (!launched) {
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, uri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        }
+    }
+}
+
 private fun titleFor(route: String?): String = when {
     route == null -> "StarBrook News"
     route.startsWith("portal") -> "Portal"
@@ -138,12 +164,24 @@ private fun StarBrookApp(container: AppContainer, deepLinkRoute: MutableStateFlo
     }
     // Notification tap: navigate to the pushed route once, then clear
     // it so a recomposition does not re-navigate. The route was already
-    // validated by StarBrookMessagingService (validRoute).
+    // validated by StarBrookMessagingService (validPushRoute). A
+    // "web?url=" route is not a navigation destination — it opens the
+    // article URL in the in-app browser instead (2026-11-27, Black
+    // Friday article: the tap used to open the News tab and show no
+    // article at all). The app stays on the News tab underneath, so
+    // closing the browser lands back where the tap started.
     val pendingRoute by deepLinkRoute.collectAsState()
     LaunchedEffect(pendingRoute) {
         val route = pendingRoute ?: return@LaunchedEffect
         deepLinkRoute.value = null
-        navController.navigate(route) { launchSingleTop = true }
+        if (route.startsWith("web?url=")) {
+            val url = runCatching {
+                URLDecoder.decode(route.removePrefix("web?url="), "UTF-8")
+            }.getOrNull().orEmpty()
+            if (url.isNotBlank()) openWebUrl(appContext, url)
+        } else {
+            navController.navigate(route) { launchSingleTop = true }
+        }
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
