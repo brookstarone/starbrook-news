@@ -11,6 +11,8 @@ import com.google.firebase.messaging.RemoteMessage
 import com.makrydensystems.news.MainActivity
 import com.makrydensystems.news.R
 import com.makrydensystems.news.data.SettingsStore
+import java.net.URI
+import java.net.URLEncoder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,7 +30,9 @@ import okhttp3.OkHttpClient
  * Payload data (all strings): title, body, kind
  * (breaking|morning|evening|weather), route (the in-app route the tap
  * opens: "news", "weather", or "story?link=..&title=.."), link (the
- * story URL for a breaking push). The channel + notification id come
+ * story URL for a breaking push — or an article URL for any other
+ * kind, which the tap opens in the in-app browser instead of the
+ * route; see pushTapDestination). The channel + notification id come
  * from the kind (NotificationChannels), so each kind replaces its own
  * previous notification instead of stacking.
  *
@@ -64,7 +68,7 @@ class StarBrookMessagingService : FirebaseMessagingService() {
         val kind = data["kind"] ?: "breaking"
         val title = data["title"]?.takeIf { it.isNotBlank() } ?: "StarBrook News"
         val body = data["body"].orEmpty()
-        val route = validRoute(data["route"])
+        val route = pushTapDestination(data["route"], data["link"])
         // R-43 (2026-11-25): the receive path used to notify for
         // whatever kind arrived, ignoring the local toggles — a user
         // who turned Morning off still got the morning push. Check the
@@ -146,21 +150,6 @@ class StarBrookMessagingService : FirebaseMessagingService() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NotificationChannels.notificationIdForKind(kind), notification)
     }
-
-    /** Only routes the app knows how to open — anything else (or a
-     * missing route) opens the News tab. The server only ever sends
-     * our own routes, but a notification tap must never crash the app
-     * on a bad value. */
-    private fun validRoute(route: String?): String {
-        val r = route?.trim().orEmpty()
-        if (r.isEmpty()) return "news"
-        return when {
-            r == "news" || r == "weather" || r == "portal" || r == "search" -> r
-            r.startsWith("story?link=") -> r
-            r.startsWith("play?url=") -> r
-            else -> "news"
-        }
-    }
 }
 
 /**
@@ -179,4 +168,62 @@ internal fun shouldShowNotification(
     "evening" -> evening
     "weather" -> weather
     else -> breaking
+}
+
+/**
+ * Only routes the app knows how to open — anything else (or a
+ * missing route) opens the News tab. The server only ever sends
+ * our own routes, but a notification tap must never crash the app
+ * on a bad value. Pure (no Android) so unit tests can cover it
+ * directly.
+ */
+internal fun validPushRoute(route: String?): String {
+    val r = route?.trim().orEmpty()
+    if (r.isEmpty()) return "news"
+    return when {
+        r == "news" || r == "weather" || r == "portal" || r == "search" -> r
+        r.startsWith("story?link=") -> r
+        r.startsWith("play?url=") -> r
+        r.startsWith("web?url=") -> r
+        else -> "news"
+    }
+}
+
+/**
+ * Push-tap destination (2026-11-27, Black Friday article): a data
+ * message carrying an http(s) [link] opens that link in the in-app
+ * browser (route "web?url=<encoded>") instead of the plain tab
+ * route — the announcement push for the deals article arrived with
+ * route "news" and a link, and the tap opened the News tab with no
+ * article in sight. A route that already carries its own URL (a
+ * breaking story route, a video play route, or a web route) is
+ * untouched, and a missing or non-http(s) link keeps the existing
+ * route behavior. Pure (no Android) so unit tests can cover it
+ * directly; the URL is encoded with java.net.URLEncoder and decoded
+ * the same way in MainActivity.
+ */
+internal fun pushTapDestination(route: String?, link: String?): String {
+    val valid = validPushRoute(route)
+    if (valid.startsWith("story?link=") || valid.startsWith("play?url=") ||
+        valid.startsWith("web?url=")
+    ) {
+        return valid
+    }
+    val url = link?.trim().orEmpty()
+    if (!isHttpUrl(url)) return valid
+    return "web?url=" + URLEncoder.encode(url, "UTF-8")
+}
+
+/**
+ * Only http(s) URLs with a host — never javascript:, intent:, file:,
+ * or a bare string. A tap must never hand the browser a scheme the
+ * server didn't intend.
+ */
+internal fun isHttpUrl(url: String): Boolean {
+    return try {
+        val uri = URI(url)
+        (uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()
+    } catch (e: Exception) {
+        false
+    }
 }

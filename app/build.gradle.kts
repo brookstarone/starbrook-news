@@ -187,6 +187,11 @@ dependencies {
     // above reads it. No Firebase Analytics — not used, not wanted.
     implementation(platform("com.google.firebase:firebase-bom:35.2.0"))
     implementation("com.google.firebase:firebase-messaging")
+    // Custom Tabs (2026-11-27, push-tap article links): a notification
+    // carrying an article URL opens it in-app instead of the News tab.
+    // 1.8.0 (Mar 2024) matches this stack's pinned era; the CustomTabs
+    // API used here is stable across 1.8+.
+    implementation("androidx.browser:browser:1.8.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
