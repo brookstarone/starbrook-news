@@ -74,6 +74,21 @@ sealed interface AppUpdateState {
     data object Failed : AppUpdateState
 }
 
+/**
+ * The outcome of a manual "Check for update" (Settings > App updates).
+ * A return value, not an AppUpdateState: the automatic loop and the
+ * dialog only ever deal in AppUpdateState, and "you're up to date" /
+ * "couldn't check" are transient answers to the user who just asked —
+ * they must not become a persistent prompt state. Only Available
+ * touches the shared state (it sets AppUpdateState.Available, so the
+ * existing dialog appears); UpToDate and Failed leave it alone.
+ */
+sealed interface ManualCheckResult {
+    data object Available : ManualCheckResult
+    data object UpToDate : ManualCheckResult
+    data object Failed : ManualCheckResult
+}
+
 class AppUpdateChecker(
     private val client: OkHttpClient,
     private val context: Context,
@@ -125,6 +140,44 @@ class AppUpdateChecker(
             currentManifest = manifest
             _state.value = AppUpdateState.Available(manifest)
         }
+    }
+
+    /**
+     * Manual "Check for update" (Settings > App updates). Fetches the
+     * manifest regardless of the 24h last-check gate and reports the
+     * outcome to the caller:
+     * - Available: a newer build with a download URL exists. Sets
+     *   AppUpdateState.Available so the existing Update dialog appears.
+     *   The dismissed-version suppression is BYPASSED — the user asked,
+     *   so a version they tapped "Later" on is offered again.
+     * - UpToDate: this build is current (no newer build in the
+     *   manifest). The shared state is untouched.
+     * - Failed: the manifest could not be fetched, or it names a newer
+     *   build with no download URL. The shared state is untouched, and
+     *   the last-check stamp is left alone so the next launch retries.
+     * A successful check stamps the last-check time, so the automatic
+     * loop does not immediately re-check. Never stomps an in-flight
+     * download or a downloaded update.
+     */
+    suspend fun checkNow(): ManualCheckResult {
+        val manifest = try {
+            fetchManifest()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return ManualCheckResult.Failed
+        }
+        settings.setLastAppUpdateCheckMs(System.currentTimeMillis())
+        val newer = manifest.versionCode > BuildConfig.VERSION_CODE
+        if (newer && manifest.apkUrl.isBlank()) return ManualCheckResult.Failed
+        if (!newer) return ManualCheckResult.UpToDate
+        if (_state.value !is AppUpdateState.Downloading &&
+            _state.value !is AppUpdateState.Downloaded
+        ) {
+            currentManifest = manifest
+            _state.value = AppUpdateState.Available(manifest)
+        }
+        return ManualCheckResult.Available
     }
 
     /**

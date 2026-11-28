@@ -88,6 +88,11 @@ class PortalAuth(
      * portal.js token() — the user is simply signed out, not errored.
      * A non-remembered session does not survive a cold start (web
      * sessionStorage parity): it is cleared here.
+     *
+     * The session is validated (and refreshed when stale) via
+     * [validAccessToken], but the token itself is never returned — the
+     * caller displays this value as the account email, so returning
+     * the raw token here put it on screen as the user's identity.
      */
     suspend fun restoreSession(): String = withContext(Dispatchers.IO) {
         val session = settings.portalSessionFlow.first() ?: return@withContext ""
@@ -96,7 +101,12 @@ class PortalAuth(
             return@withContext ""
         }
         return@withContext try {
-            validAccessToken() ?: ""
+            validAccessToken() ?: return@withContext ""
+            // Re-read the stored session: a refresh rewrites it via
+            // takeTokens with session.email preserved, so this is the
+            // account email, not the token.
+            settings.portalSessionFlow.first()?.email.orEmpty()
+                .ifBlank { fetchAccountEmail() }
         } catch (e: IOException) {
             // Offline on cold start: keep the stored session (the Hub
             // shows signed-in from the cache; the next authed call

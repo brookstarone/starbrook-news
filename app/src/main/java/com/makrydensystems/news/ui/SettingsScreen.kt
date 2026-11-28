@@ -41,9 +41,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.makrydensystems.news.BuildConfig
 import com.makrydensystems.news.data.SettingsStore
 import com.makrydensystems.news.data.di.AppContainer
 import com.makrydensystems.news.data.di.PushModule
+import com.makrydensystems.news.data.update.ManualCheckResult
 import com.makrydensystems.news.ui.components.SectionHeader
 import com.makrydensystems.news.ui.theme.StarBrookColors
 import com.makrydensystems.news.ui.theme.StarBrookShapes
@@ -208,6 +210,12 @@ fun SettingsScreen(
     var zipInput by remember(zip) { mutableStateOf(zip.orEmpty()) }
     var zipError by remember { mutableStateOf<String?>(null) }
 
+    // Manual update check (Settings > App updates, below): the button
+    // lives in the section header; the result is the last manual
+    // check's outcome, shown inline until the next tap.
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var manualCheckResult by remember { mutableStateOf<ManualCheckResult?>(null) }
+
     // FCM push (Build #24): a toggle change re-registers this device
     // with the server (new kinds), and a ZIP change re-registers with
     // the new ZIP — the server row is upserted, so no re-subscribe is
@@ -361,6 +369,37 @@ fun SettingsScreen(
             description = "Severe weather warnings and rain starting soon, for your ZIP code. Tapping it opens Weather.",
             checked = notifyWeather,
             onChange = { applyNotifyToggle(vm::setNotifyWeather, it) },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionHeader(
+            title = "App updates",
+            actionLabel = if (checkingUpdate) "Checking…" else "Check for update",
+            onAction = {
+                if (!checkingUpdate) {
+                    checkingUpdate = true
+                    manualCheckResult = null
+                    scope.launch {
+                        manualCheckResult = container.appUpdateChecker.checkNow()
+                        checkingUpdate = false
+                    }
+                }
+            },
+        )
+        Text(
+            text = "Build ${BuildConfig.VERSION_CODE} (${BuildConfig.VERSION_NAME})",
+            style = StarBrookType.body,
+            color = StarBrookColors.textPrimary,
+        )
+        Text(
+            text = when {
+                checkingUpdate -> "Checking for updates…"
+                manualCheckResult is ManualCheckResult.UpToDate -> "You're up to date."
+                manualCheckResult is ManualCheckResult.Available -> "Update available."
+                manualCheckResult is ManualCheckResult.Failed -> "Couldn't check — try again."
+                else -> "The app checks once a day on its own. Tap Check for update to check now."
+            },
+            style = StarBrookType.bodySmall,
+            color = StarBrookColors.textSecondary,
         )
         Spacer(modifier = Modifier.height(24.dp))
     }
