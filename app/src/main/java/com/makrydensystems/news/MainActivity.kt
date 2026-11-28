@@ -107,7 +107,7 @@ private fun openPortal(navController: NavController, reason: String? = null) {
  * when no browser can open the URL at all — the tap never crashes
  * the app. Never a WebView.
  */
-private fun openWebUrl(context: Context, url: String) {
+internal fun openWebUrl(context: Context, url: String) {
     val uri = Uri.parse(url)
     val launched = runCatching {
         CustomTabsIntent.Builder().build().launchUrl(context, uri)
