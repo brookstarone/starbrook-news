@@ -20,7 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -33,6 +33,7 @@ import com.makrydensystems.news.data.NewsRepository
 import com.makrydensystems.news.data.di.AppContainer
 import com.makrydensystems.news.data.model.Breaking
 import com.makrydensystems.news.data.model.Story
+import com.makrydensystems.news.openWebUrl
 import com.makrydensystems.news.ui.components.EmptyState
 import com.makrydensystems.news.ui.components.ErrorState
 import com.makrydensystems.news.ui.components.GoldOriginalBadge
@@ -409,8 +410,9 @@ private fun formatStoryTime(publishedMillis: Long): String {
  * Native read view: title, source + time, hero image, and the FULL
  * article body — extracted live via story-body-extract, or stored in
  * the row for StarBrook Originals. When extraction is blocked the
- * excerpt stays plus a "Read at [source]" link (opened in the
- * browser — no WebView anywhere in the app). A story no cache knows
+ * excerpt stays plus a "Read at [source]" link (opened in the in-app
+ * browser — a Custom Tab, never a WebView, never the system chooser).
+ * A story no cache knows
  * still resolves through live extraction; only a blocked source with
  * no stored text lands on the honest unavailable state.
  */
@@ -432,7 +434,7 @@ fun ReadScreen(
     val state by vm.state.collectAsState()
     val isSaved by vm.isSaved.collectAsState()
     val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
 
     Column(
         modifier = modifier
@@ -476,7 +478,7 @@ fun ReadScreen(
                         color = StarBrookColors.gold,
                         modifier = Modifier
                             .padding(vertical = 12.dp)
-                            .clickable { uriHandler.openUri(s.articleUrl) },
+                            .clickable { openWebUrl(context, s.articleUrl) },
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -589,7 +591,7 @@ fun ReadScreen(
                                 color = StarBrookColors.gold,
                                 modifier = Modifier
                                     .padding(vertical = 12.dp)
-                                    .clickable { uriHandler.openUri(s.articleUrl) },
+                                    .clickable { openWebUrl(context, s.articleUrl) },
                             )
                         }
                         Text(
